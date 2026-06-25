@@ -75,6 +75,31 @@ test("cursor_run requires a prompt", async () => {
   await assert.rejects(() => handleCall("cursor_run", {}, d), /prompt/);
 });
 
+test("cursor_run rejects invalid waitMs and background types", async () => {
+  const { deps: d } = deps();
+  await assert.rejects(
+    () => handleCall("cursor_run", { prompt: "x", waitMs: "nope" }, d),
+    /waitMs/,
+  );
+  await assert.rejects(
+    () => handleCall("cursor_run", { prompt: "x", background: "false" }, d),
+    /background/,
+  );
+});
+
+test("cursor_run rejects invalid capability and isolation", async () => {
+  const { deps: d } = deps();
+  await assert.rejects(
+    () => handleCall("cursor_run", { prompt: "x", capability: "fly" }, d),
+    /capability/,
+  );
+  await assert.rejects(
+    () =>
+      handleCall("cursor_run", { prompt: "x", isolation: { type: "Nope" } }, d),
+    /isolation/,
+  );
+});
+
 test("routes each tool to the registry", async () => {
   const { deps: d, calls } = deps();
   await handleCall("cursor_run", { prompt: "x" }, d);

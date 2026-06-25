@@ -8,6 +8,17 @@ test("explicit trailing STATUS line wins", () => {
   assert.equal(deriveStatus("STATUS: NEEDS_CONTEXT\n", false, true), "NEEDS_CONTEXT");
 });
 
+test("only the final STATUS line wins, not an earlier one in prose", () => {
+  assert.equal(
+    deriveStatus("STATUS: NEEDS_CONTEXT\nmore work\nSTATUS: DONE", false, true),
+    "DONE",
+  );
+  assert.equal(
+    deriveStatus("mentioned STATUS: NEEDS_CONTEXT in prose\nall good", false, true),
+    "DONE",
+  );
+});
+
 test("unknown STATUS token is ignored, falls through to DONE", () => {
   assert.equal(deriveStatus("STATUS: WHATEVER", false, true), "DONE");
 });

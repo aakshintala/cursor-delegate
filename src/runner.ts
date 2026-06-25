@@ -15,7 +15,7 @@ export interface RunnerDeps {
   cliConfig: CliConfig | null;
   serverCwd: string;
   resolveBin?: (override?: string) => string;
-  captureHead?: (cwd: string) => Promise<string | null>;
+  captureHead?: (cwd: string, ref?: string) => Promise<string | null>;
 }
 
 /** Build the cursor-agent argv (pure). The prompt is always the last positional arg. */
@@ -38,7 +38,7 @@ export function buildArgv(o: {
     ...o.isoFlags,
   ];
   if (o.session) argv.push("--resume", o.session);
-  argv.push(o.prompt);
+  argv.push("--", o.prompt);
   return argv;
 }
 
@@ -75,7 +75,18 @@ export async function runDelegation(
   const gate = input.gate ?? config.profile.gate ?? "";
 
   const captureHeadFn = deps.captureHead ?? captureHead;
-  const headBefore = await captureHeadFn(iso.cwd);
+  const isolation = input.isolation ?? { type: "None" as const };
+  let headBefore: string | null;
+  let worktreeName: string | undefined;
+  if (isolation.type === "BackendProvided") {
+    worktreeName = isolation.name;
+    // A worktree forks from `base` (or server HEAD) at creation, so its base commit is
+    // resolvable in the server repo now — even though the worktree itself may not exist
+    // yet. finalize resolves the worktree dir post-run and diffs it against this base.
+    headBefore = await captureHeadFn(deps.serverCwd, isolation.base);
+  } else {
+    headBefore = await captureHeadFn(iso.cwd);
+  }
 
   const bin = (deps.resolveBin ?? resolveCursorBin)();
   const argv = buildArgv({
@@ -101,6 +112,7 @@ export async function runDelegation(
     background: input.background,
     priceMap: config.priceMap,
     downgraded: cap.downgraded,
+    worktreeName,
   };
 
   return deps.registry.dispatch(spec, opts);

@@ -187,3 +187,54 @@ test("killAll SIGTERMs every active child", async () => {
   assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
   assert.deepEqual(handles[1].child.killed, ["SIGTERM"]);
 });
+
+test("idle timer cleared at child close does not STALL during a slow finalize", async () => {
+  let unblock!: () => void;
+  const slowFinalize = async (
+    res: BackendResult,
+    ctx: { backend: string; model: string; jobId?: string },
+  ) => {
+    await new Promise<void>((r) => {
+      unblock = r;
+    });
+    return fakeFinalize(res, ctx);
+  };
+  const { registry, handles, clock } = setup({
+    idleMs: 50,
+    deadlineMs: 100000,
+    finalize: slowFinalize as unknown as RegistryDeps["finalize"],
+  });
+  const r = await registry.dispatch(specOf({ background: true }));
+  handles[0].emitProgress({
+    lastTool: "shell",
+    tokensSoFar: 1,
+    lastAssistant: null,
+    filesTouched: [],
+    phase: null,
+  });
+  handles[0].finish(doneOk);
+  await clock.advance(100);
+  assert.equal(registry.poll(jobId(r)).status, "RUNNING");
+  unblock();
+  await flush();
+  assert.equal(registry.poll(jobId(r)).status, "DONE");
+});
+
+test("cancel skips finalize side effects", async () => {
+  let gateRan = false;
+  const trackingFinalize = async (
+    res: BackendResult,
+    ctx: { gate?: string; runGate?: unknown },
+  ) => {
+    if (ctx.gate) gateRan = true;
+    return fakeFinalize(res, ctx as { backend: string; model: string });
+  };
+  const { registry, handles } = setup({
+    finalize: trackingFinalize as unknown as RegistryDeps["finalize"],
+  });
+  const r = await registry.dispatch(specOf({ background: true, gate: "make test" }));
+  await registry.cancel(jobId(r));
+  assert.equal(gateRan, false);
+  assert.equal(registry.poll(jobId(r)).status, "CANCELLED");
+  assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
+});

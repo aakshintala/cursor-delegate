@@ -30,6 +30,17 @@ interface ToolCallShape {
   mcpToolCall?: { toolName?: string };
 }
 
+const PATH_ARG_KEYS = ["path", "filePath", "file_path", "target", "destination"];
+
+function pathFromArgs(args: Record<string, unknown> | undefined): string | null {
+  if (!args) return null;
+  for (const key of PATH_ARG_KEYS) {
+    const v = args[key];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return null;
+}
+
 function extractTool(tc: ToolCallShape): {
   tool: string | null;
   path: string | null;
@@ -40,13 +51,9 @@ function extractTool(tc: ToolCallShape): {
   for (const key of Object.keys(tc)) {
     if (key.endsWith("ToolCall")) {
       const name = key.slice(0, -"ToolCall".length); // "shell", "edit", ...
-      let path: string | null = null;
-      if (name === "edit") {
-        const args = (tc[key] as { args?: { path?: string } } | undefined)
-          ?.args;
-        path = args?.path ?? null;
-      }
-      return { tool: name, path };
+      const args = (tc[key] as { args?: Record<string, unknown> } | undefined)
+        ?.args;
+      return { tool: name, path: pathFromArgs(args) };
     }
   }
   return { tool: null, path: null };
@@ -87,7 +94,7 @@ export function parseLine(line: string, state: StreamState): ParsedLine {
   // Any event carrying a numeric usage.outputTokens updates the live token count.
   const usage = ev.usage as { outputTokens?: unknown } | undefined;
   if (usage && typeof usage.outputTokens === "number") {
-    state.tokensSoFar = usage.outputTokens;
+    state.tokensSoFar = Math.max(state.tokensSoFar, usage.outputTokens);
     changed = true;
   }
 

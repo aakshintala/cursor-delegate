@@ -1,0 +1,6 @@
+{
+  "cheap-bulk":        { "backend": "cursor", "model": "composer-2.5" },
+  "standard":          { "backend": "cursor", "model": "gemini-3.5-flash" },
+  "coding-specialist": { "backend": "cursor", "model": "composer-2.5" },
+  "diversity":         { "backend": "cursor", "model": "gpt-5.5-medium" }
+}

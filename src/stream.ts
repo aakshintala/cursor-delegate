@@ -1,0 +1,129 @@
+import type { RawCursorJson } from "./types.js";
+
+export interface StreamState {
+  lastTool: string | null;
+  tokensSoFar: number;
+  lastAssistant: string | null;
+  filesTouched: string[];
+  phase: string | null;
+}
+
+export function initStreamState(): StreamState {
+  return {
+    lastTool: null,
+    tokensSoFar: 0,
+    lastAssistant: null,
+    filesTouched: [],
+    phase: null,
+  };
+}
+
+export interface ParsedLine {
+  /** Set only for the terminal `result` event. */
+  result?: RawCursorJson;
+  /** Whether live state changed (a progress emit is worthwhile). */
+  changed: boolean;
+}
+
+interface ToolCallShape {
+  [key: string]: unknown;
+  mcpToolCall?: { toolName?: string };
+}
+
+function extractTool(tc: ToolCallShape): {
+  tool: string | null;
+  path: string | null;
+} {
+  if (tc.mcpToolCall) {
+    return { tool: tc.mcpToolCall.toolName ?? "mcp", path: null };
+  }
+  for (const key of Object.keys(tc)) {
+    if (key.endsWith("ToolCall")) {
+      const name = key.slice(0, -"ToolCall".length); // "shell", "edit", ...
+      let path: string | null = null;
+      if (name === "edit") {
+        const args = (tc[key] as { args?: { path?: string } } | undefined)
+          ?.args;
+        path = args?.path ?? null;
+      }
+      return { tool: name, path };
+    }
+  }
+  return { tool: null, path: null };
+}
+
+function extractAssistantText(message: unknown): string | null {
+  const content = (message as { content?: unknown })?.content;
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .filter(
+      (b): b is { type: string; text: string } =>
+        !!b && (b as { type?: string }).type === "text" &&
+        typeof (b as { text?: unknown }).text === "string",
+    )
+    .map((b) => b.text);
+  if (parts.length === 0) return null;
+  return parts.join("");
+}
+
+/**
+ * Parse one stream-json (NDJSON) line, mutating `state`.
+ * Ignores blank / non-JSON lines and events with no `type`.
+ */
+export function parseLine(line: string, state: StreamState): ParsedLine {
+  const trimmed = line.trim();
+  if (!trimmed) return { changed: false };
+
+  let ev: Record<string, unknown>;
+  try {
+    ev = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return { changed: false };
+  }
+  if (!ev || typeof ev.type !== "string") return { changed: false };
+
+  let changed = false;
+
+  // Any event carrying a numeric usage.outputTokens updates the live token count.
+  const usage = ev.usage as { outputTokens?: unknown } | undefined;
+  if (usage && typeof usage.outputTokens === "number") {
+    state.tokensSoFar = usage.outputTokens;
+    changed = true;
+  }
+
+  switch (ev.type) {
+    case "tool_call": {
+      if (ev.subtype === "started" && ev.tool_call) {
+        const { tool, path } = extractTool(ev.tool_call as ToolCallShape);
+        if (tool) {
+          state.lastTool = tool;
+          changed = true;
+        }
+        if (path && !state.filesTouched.includes(path)) {
+          state.filesTouched.push(path);
+          changed = true;
+        }
+      }
+      break;
+    }
+    case "assistant": {
+      const text = extractAssistantText(ev.message);
+      if (text) {
+        state.lastAssistant = text.slice(0, 200);
+        changed = true;
+      }
+      break;
+    }
+    case "thinking": {
+      if (ev.subtype === "delta" && typeof ev.text === "string") {
+        state.phase = "thinking";
+        changed = true;
+      }
+      break;
+    }
+    case "result":
+      return { result: ev as RawCursorJson, changed: true };
+  }
+
+  return { changed };
+}

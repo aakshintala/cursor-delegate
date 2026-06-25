@@ -54,9 +54,22 @@ test("buildArgv puts the prompt last and includes the fixed flags", () => {
     "m",
     "--mode",
     "ask",
+    "--",
     "hello",
   ]);
   assert.equal(argv[argv.length - 1], "hello");
+});
+
+test("buildArgv inserts -- before the prompt so dash-prefixed prompts are positional", () => {
+  const argv = buildArgv({
+    model: "m",
+    capFlags: [],
+    isoFlags: [],
+    prompt: "--help",
+  });
+  const sep = argv.indexOf("--");
+  assert.ok(sep >= 0);
+  assert.equal(argv[sep + 1], "--help");
 });
 
 test("buildArgv adds --resume when a session is given", () => {
@@ -129,6 +142,45 @@ test("CallerProvided isolation sets cwd, the lock path, and --workspace", async 
   assert.equal(spec.cwd, "/repo");
   assert.equal(spec.path, "/repo");
   assert.ok(spec.argv.includes("--workspace"));
+});
+
+test("BackendProvided captures the worktree base commit against serverCwd", async () => {
+  const { registry, last } = fakeRegistry();
+  const calls: Array<{ cwd: string; ref?: string }> = [];
+  const deps = depsWith(registry, ["rm -rf /"]);
+  deps.captureHead = async (cwd, ref) => {
+    calls.push({ cwd, ref });
+    return "BASE0";
+  };
+  await runDelegation(
+    {
+      prompt: "edit",
+      capability: "write",
+      isolation: { type: "BackendProvided", name: "wt-1", base: "main" },
+    },
+    deps,
+  );
+  const spec = last();
+  // HEAD is read from the server repo at the worktree's base ref, not the (absent) worktree.
+  assert.deepEqual(calls, [{ cwd: "/srv", ref: "main" }]);
+  assert.equal(spec.headBefore, "BASE0");
+  assert.equal(spec.worktreeName, "wt-1");
+});
+
+test("BackendProvided with no base defaults to server HEAD", async () => {
+  const { registry } = fakeRegistry();
+  const calls: Array<{ cwd: string; ref?: string }> = [];
+  const deps = depsWith(registry, ["rm -rf /"]);
+  deps.captureHead = async (cwd, ref) => {
+    calls.push({ cwd, ref });
+    return "HEAD0";
+  };
+  await runDelegation(
+    { prompt: "edit", capability: "write", isolation: { type: "BackendProvided" } },
+    deps,
+  );
+  // ref undefined -> captureHead falls back to HEAD.
+  assert.deepEqual(calls, [{ cwd: "/srv", ref: undefined }]);
 });
 
 test("per-call gate and verifyCommands override the profile defaults", async () => {

@@ -41,6 +41,30 @@ test("edit tool_call records the touched path", () => {
   assert.deepEqual(s.filesTouched, ["src/a.ts"]);
 });
 
+test("write/delete tool_calls record path-shaped args generically", () => {
+  const s = initStreamState();
+  parseLine(
+    JSON.stringify({
+      type: "tool_call",
+      subtype: "started",
+      tool_call: { writeToolCall: { args: { filePath: "src/new.ts" } } },
+    }),
+    s,
+  );
+  assert.equal(s.lastTool, "write");
+  assert.deepEqual(s.filesTouched, ["src/new.ts"]);
+
+  parseLine(
+    JSON.stringify({
+      type: "tool_call",
+      subtype: "started",
+      tool_call: { deleteToolCall: { args: { path: "old.ts" } } },
+    }),
+    s,
+  );
+  assert.deepEqual(s.filesTouched, ["src/new.ts", "old.ts"]);
+});
+
 test("mcp tool_call uses toolName, falls back to mcp", () => {
   const s = initStreamState();
   parseLine(
@@ -96,6 +120,19 @@ test("any usage.outputTokens updates tokensSoFar", () => {
     s,
   );
   assert.equal(s.tokensSoFar, 42);
+});
+
+test("tokensSoFar is monotonic when usage decreases", () => {
+  const s = initStreamState();
+  parseLine(
+    JSON.stringify({ type: "assistant", usage: { outputTokens: 100 } }),
+    s,
+  );
+  parseLine(
+    JSON.stringify({ type: "assistant", usage: { outputTokens: 40 } }),
+    s,
+  );
+  assert.equal(s.tokensSoFar, 100);
 });
 
 test("result event returns the raw blob", () => {

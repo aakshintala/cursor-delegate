@@ -140,6 +140,8 @@ export interface JobSpec {
   background?: boolean;
   priceMap: PriceMap;
   downgraded: boolean;
+  /** Set for BackendProvided isolation; used to resolve the worktree for change-set tracking. */
+  worktreeName?: string;
 }
 
 export type JobStatus =
@@ -187,4 +189,10 @@ export interface FinalizeCtx {
   downgraded?: boolean;
   runGate?: (command: string, cwd: string) => Promise<GateResult>;
   gitDelta?: (cwd: string, headBefore: string | null) => Promise<ChangeSet | null>;
+  /** When set, change-set and gate run in the resolved worktree under `cwd`. */
+  worktreeName?: string;
+  resolveWorktreePath?: (
+    repoCwd: string,
+    name?: string,
+  ) => Promise<string | null>;
 }

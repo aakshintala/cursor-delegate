@@ -13,7 +13,9 @@ export function deriveStatus(
   rawIsError: boolean | undefined,
   cleanExit: boolean,
 ): RunStatus {
-  const m = text.match(/STATUS:\s*([A-Z_]+)\s*$/m);
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+  const last = lines[lines.length - 1];
+  const m = last?.match(/^STATUS:\s*([A-Z_]+)\s*$/);
   if (m && (RUN_STATUSES as string[]).includes(m[1])) {
     return m[1] as RunStatus;
   }

@@ -18,9 +18,12 @@ function git(cwd: string, args: string[]): Promise<string | null> {
   });
 }
 
-/** Capture HEAD of a working tree (null if not a repo). */
-export async function captureHead(cwd: string): Promise<string | null> {
-  const out = await git(cwd, ["rev-parse", "HEAD"]);
+/** Resolve a ref (default HEAD) to a commit SHA in a working tree (null if not a repo / unknown ref). */
+export async function captureHead(
+  cwd: string,
+  ref = "HEAD",
+): Promise<string | null> {
+  const out = await git(cwd, ["rev-parse", ref]);
   return out === null ? null : out.trim() || null;
 }
 
@@ -53,24 +56,58 @@ export function parsePorcelain(out: string): string[] {
  * Tool-computed git change-set (#6). Best-effort: any git failure yields null, never throws.
  * Not a repo (rev-parse HEAD fails) -> null.
  */
+/** Resolve a git worktree path under `repoCwd` (null if not found or not a repo). */
+export async function resolveWorktreePath(
+  repoCwd: string,
+  name?: string,
+): Promise<string | null> {
+  const out = await git(repoCwd, ["worktree", "list", "--porcelain"]);
+  if (!out) return null;
+
+  const worktrees: string[] = [];
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      worktrees.push(line.slice("worktree ".length));
+    }
+  }
+  if (worktrees.length === 0) return null;
+
+  const primary = worktrees[0]!;
+  const secondary = worktrees.filter((wt) => wt !== primary);
+
+  if (name) {
+    const match = worktrees.find(
+      (wt) =>
+        wt === name ||
+        wt.endsWith(`/${name}`) ||
+        wt.endsWith(name),
+    );
+    return match ?? null;
+  }
+
+  if (secondary.length === 1) return secondary[0]!;
+  return null;
+}
+
 export async function gitDelta(
   cwd: string,
   headBefore: string | null,
 ): Promise<ChangeSet | null> {
-  const headRaw = await git(cwd, ["rev-parse", "HEAD"]);
-  if (headRaw === null) return null; // not a repo
-  const headAfter = headRaw.trim() || null;
+  const headAfter = await captureHead(cwd);
+  if (headAfter === null) return null; // not a repo
 
   let newCommits: string[] = [];
   let filesChanged: string[] = [];
   let diffstat = "";
 
   if (headBefore) {
-    const rl = await git(cwd, ["rev-list", `${headBefore}..HEAD`]);
+    const [rl, fc, ds] = await Promise.all([
+      git(cwd, ["rev-list", `${headBefore}..HEAD`]),
+      git(cwd, ["diff", "--name-only", headBefore]),
+      git(cwd, ["diff", "--stat", headBefore]),
+    ]);
     newCommits = rl ? rl.split("\n").map((s) => s.trim()).filter(Boolean) : [];
-    const fc = await git(cwd, ["diff", "--name-only", headBefore]);
     filesChanged = fc ? fc.split("\n").map((s) => s.trim()).filter(Boolean) : [];
-    const ds = await git(cwd, ["diff", "--stat", headBefore]);
     diffstat = ds ? ds.trimEnd() : "";
   }
 

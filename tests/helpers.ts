@@ -45,6 +45,8 @@ export class FakeClock implements Clock {
 export interface FakeChild {
   killed: string[];
   kill(sig?: string): void;
+  on(event: "close" | "error", cb: () => void): void;
+  emitClose(): void;
 }
 
 export interface FakeHandle {
@@ -68,14 +70,22 @@ export function makeFakeBackend(): { backend: Backend; handles: FakeHandle[] } {
       const done = new Promise<BackendResult>((r) => {
         resolveDone = r;
       });
+      const closeListeners = new Set<() => void>();
       const child: FakeChild = {
         killed: [],
+        on(event, cb) {
+          if (event === "close") closeListeners.add(cb);
+        },
+        emitClose() {
+          for (const cb of closeListeners) cb();
+        },
         kill(sig?: string) {
           child.killed.push(sig ?? "SIGTERM");
           // Simulate the child dying after a tick (non-clean exit).
-          queueMicrotask(() =>
-            resolveDone({ raw: {}, cleanExit: false, stderr: "" }),
-          );
+          queueMicrotask(() => {
+            child.emitClose();
+            resolveDone({ raw: {}, cleanExit: false, stderr: "" });
+          });
         },
       };
       const handle: FakeHandle = {
@@ -84,7 +94,10 @@ export function makeFakeBackend(): { backend: Backend; handles: FakeHandle[] } {
         events,
         emitProgress: (snap) => events.emit("progress", snap),
         emitStderr: (s) => events.emit("stderr", s),
-        finish: (r) => resolveDone(r),
+        finish: (r) => {
+          child.emitClose();
+          resolveDone(r);
+        },
         done,
       };
       handles.push(handle);

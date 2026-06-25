@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureHead, gitDelta, parsePorcelain } from "../src/git.js";
+import { captureHead, gitDelta, parsePorcelain, resolveWorktreePath } from "../src/git.js";
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "cd-git-"));
@@ -58,6 +58,26 @@ test("gitDelta computes commits, files, and dirty state", async () => {
     assert.deepEqual(cs.uncommittedFiles, ["b.txt"]);
     assert.match(cs.diffstat, /a\.txt/);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveWorktreePath finds a named worktree", async () => {
+  const dir = makeRepo();
+  const wtDir = join(dir, "wt-side");
+  try {
+    execFileSync("git", ["-C", dir, "worktree", "add", "-q", wtDir, "-b", "wt1"], {
+      stdio: "pipe",
+    });
+    assert.ok(await resolveWorktreePath(dir));
+    const resolved = await resolveWorktreePath(dir, "wt-side");
+    assert.ok(resolved);
+    assert.ok(resolved!.endsWith("/wt-side"));
+    assert.equal(await resolveWorktreePath(dir, "missing"), null);
+  } finally {
+    execFileSync("git", ["-C", dir, "worktree", "remove", "-f", wtDir], {
+      stdio: "pipe",
+    });
     rmSync(dir, { recursive: true, force: true });
   }
 });

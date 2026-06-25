@@ -6,7 +6,6 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { RunInput } from "./types.js";
 import type { CliConfig } from "./safety.js";
 import {
   loadConfig,
@@ -16,6 +15,7 @@ import {
 import { makeJobRegistry, type JobRegistry } from "./job-registry.js";
 import { makeCursorAdapter } from "./backends/cursor.js";
 import { runDelegation } from "./runner.js";
+import { validateRunInput } from "./validate.js";
 import {
   progressSinkFrom,
   type McpExtra,
@@ -70,8 +70,7 @@ export async function handleCall(
 
   switch (name) {
     case "cursor_run": {
-      requireString(args, "prompt");
-      return runDelegation(args as unknown as RunInput, deps, { sink, signal });
+      return runDelegation(validateRunInput(args ?? {}), deps, { sink, signal });
     }
     case "cursor_poll":
       return deps.registry.poll(requireString(args, "jobId"));

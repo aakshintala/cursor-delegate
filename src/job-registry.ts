@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 import type { Backend, BackendResult, ProgressSnapshotRaw } from "./backends/types.js";
 import type { ProgressSink, ProgressUpdate } from "./progress.js";
-import { finalizeRun as defaultFinalize } from "./finalize.js";
+import { finalizeRun as defaultFinalize, baseOutput } from "./finalize.js";
 import { clampWait } from "./util.js";
 
 const COMPLETED_CAP = 100;
@@ -167,6 +167,15 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     };
     armIdle();
 
+    const clearIdle = () => {
+      if (job.idleTimer) {
+        clock.clearTimer(job.idleTimer);
+        job.idleTimer = null;
+      }
+    };
+    handle.child?.on?.("close", clearIdle);
+    handle.child?.on?.("error", clearIdle);
+
     handle.events.on("progress", (snap: ProgressSnapshotRaw) => {
       job.lastTool = snap.lastTool;
       job.tokensSoFar = snap.tokensSoFar;
@@ -191,6 +200,21 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     });
 
     const finalizeJob = async (res: BackendResult): Promise<RunOutput> => {
+      clearIdle();
+
+      // Cancel/stall: skip finalize entirely (gate side effects + git) — #6.
+      if (job.terminationReason) {
+        const out = baseOutput(res, {
+          model: spec.model,
+          backend: spec.backend,
+          priceMap: spec.priceMap,
+          jobId: job.id,
+          downgraded: spec.downgraded,
+        });
+        retire(job, out);
+        return out;
+      }
+
       const ctx: FinalizeCtx = {
         cwd: spec.cwd,
         headBefore: spec.headBefore,
@@ -202,6 +226,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
         priceMap: spec.priceMap,
         jobId: job.id,
         downgraded: spec.downgraded,
+        worktreeName: spec.worktreeName,
       };
       const out = await finalize(res, ctx);
       retire(job, out);
@@ -232,7 +257,6 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       return Promise.resolve({
         status: "RUNNING" as const,
         jobId,
-        busyPath: spec.path ?? undefined,
       });
     }
 
@@ -247,7 +271,6 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       return {
         status: "RUNNING" as const,
         jobId,
-        busyPath: spec.path ?? undefined,
       };
     });
   }

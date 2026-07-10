@@ -22,6 +22,7 @@ import {
   type ProgressSink,
 } from "./progress.js";
 import { buildTools } from "./tool-schemas.js";
+import { runDoctor } from "./doctor.js";
 
 export interface ServerDeps {
   config: Awaited<ReturnType<typeof loadConfig>>;
@@ -101,6 +102,15 @@ export async function handleCall(
         deps,
         { sink, signal },
       );
+    case "doctor": {
+      if (args?.deep !== undefined && typeof args.deep !== "boolean") {
+        throw new Error(`invalid field "deep" (expected boolean)`);
+      }
+      return runDoctor({
+        config: deps.config,
+        deep: args?.deep === true,
+      });
+    }
     default:
       throw new Error(`unknown tool "${name}"`);
   }

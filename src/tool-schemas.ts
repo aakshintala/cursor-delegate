@@ -203,5 +203,24 @@ export function buildTools(config: Pick<Config, "default" | "models">) {
         "Unknown/expired jobId → {status:'NOT_FOUND'}; a job not awaiting input is rejected.",
       inputSchema: ANSWER_SCHEMA,
     },
+    {
+      name: "doctor",
+      description:
+        "Diagnose cursor-delegate setup: plugin version, cursor-agent binary + --version, " +
+        "account login via `cursor-agent about` (email, subscription, current model), and " +
+        "model-menu drift (config/models.json ids vs `cursor-agent models` / `--list-models`). " +
+        "Configured ids missing from the account list are WARNINGS, not failures. " +
+        "Prices are not checkable via the CLI. Optional `deep` is reserved and currently ignored.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          deep: {
+            type: "boolean",
+            description:
+              "Reserved for future deep diagnostics. Currently ignored.",
+          },
+        },
+      },
+    },
   ];
 }

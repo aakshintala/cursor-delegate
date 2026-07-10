@@ -64,9 +64,9 @@ function deps(): { deps: ServerDeps; calls: string[] } {
   };
 }
 
-test("exposes seven tools from buildTools", () => {
+test("exposes eight tools from buildTools including doctor", () => {
   const tools = buildTools(config);
-  assert.equal(tools.length, 7);
+  assert.equal(tools.length, 8);
   const names = tools.map((t) => t.name);
   assert.deepEqual(names, [
     "cursor_run",
@@ -76,6 +76,7 @@ test("exposes seven tools from buildTools", () => {
     "cursor_wait_any",
     "cursor_wait_all",
     "cursor_answer",
+    "doctor",
   ]);
 });
 
@@ -161,6 +162,42 @@ test("cursor_answer returns NOT_FOUND for unknown jobId", async () => {
   );
   assert.deepEqual(res, { status: "NOT_FOUND" });
   assert.deepEqual(calls, ["lookupAnswer:missing"]);
+});
+
+test("doctor rejects non-boolean deep", async () => {
+  const { deps: d } = deps();
+  await assert.rejects(
+    () => handleCall("doctor", { deep: "yes" }, d),
+    /deep/,
+  );
+});
+
+test("doctor returns a DoctorReport shaped object without requiring args", async () => {
+  const { deps: d } = deps();
+  // Force a missing binary so runDoctor does not exec the real CLI.
+  const prev = process.env.CURSOR_AGENT_BIN;
+  process.env.CURSOR_AGENT_BIN = "/nonexistent/cursor-agent-for-doctor-test";
+  try {
+    const report = (await handleCall("doctor", {}, d)) as {
+      ok: boolean;
+      plugin: { version: string };
+      agent: { found: boolean; path: string | null };
+      account: { loggedIn: boolean };
+      modelMenu: { pricesCheckable: boolean; note: string };
+      warnings: string[];
+      failures: string[];
+    };
+    assert.equal(typeof report.plugin.version, "string");
+    assert.equal(report.agent.found, false);
+    assert.equal(report.ok, false);
+    assert.equal(report.modelMenu.pricesCheckable, false);
+    assert.match(report.modelMenu.note, /not checkable/i);
+    assert.ok(Array.isArray(report.failures));
+    assert.ok(report.failures.some((f) => /not found/i.test(f)));
+  } finally {
+    if (prev === undefined) delete process.env.CURSOR_AGENT_BIN;
+    else process.env.CURSOR_AGENT_BIN = prev;
+  }
 });
 
 test("cursor_answer rejects a job that is not awaiting an answer", async () => {

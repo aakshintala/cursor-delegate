@@ -46,7 +46,7 @@ test("run input schema enum is the allow-list ids", () => {
 
 test("buildTools wires cursor_run description with blurb and default", () => {
   const tools = buildTools(config);
-  assert.equal(tools.length, 7);
+  assert.equal(tools.length, 8);
   const run = tools.find((t) => t.name === "cursor_run");
   assert.ok(run);
   assert.match(run!.description, /composer-2\.5 — Composer 2\.5/);
@@ -66,8 +66,24 @@ test("buildTools wires cursor_run description with blurb and default", () => {
       "cursor_wait_any",
       "cursor_wait_all",
       "cursor_answer",
+      "doctor",
     ],
   );
+});
+
+test("doctor tool schema has optional reserved deep flag and no required fields", () => {
+  const tools = buildTools(config);
+  const doctor = tools.find((t) => t.name === "doctor");
+  assert.ok(doctor);
+  assert.match(doctor!.description, /plugin/i);
+  assert.match(doctor!.description, /model menu|models\.json/i);
+  assert.match(doctor!.description, /warning/i);
+  const schema = doctor!.inputSchema as {
+    properties: { deep?: { type: string } };
+    required?: string[];
+  };
+  assert.equal(schema.properties.deep?.type, "boolean");
+  assert.ok(!schema.required || schema.required.length === 0);
 });
 
 test("cursor_answer schema requires jobId and answer", () => {

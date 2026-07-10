@@ -4,8 +4,8 @@ import { join } from "node:path";
 import type {
   Config,
   HostProfile,
+  ModelEntry,
   PriceMap,
-  TierMap,
 } from "./types.js";
 import type { CliConfig } from "./safety.js";
 
@@ -36,17 +36,29 @@ export function defaultCliConfigPath(): string {
 }
 
 export interface LoadConfigOpts {
-  tierMapPath: string;
-  priceMapPath: string;
+  modelsPath: string;
   hostProfilePath?: string;
   readFile?: ReadFileFn;
 }
 
+interface ModelsFile {
+  default: string;
+  models: Record<string, ModelEntry>;
+}
+
+function toPriceMap(models: Record<string, ModelEntry>): PriceMap {
+  const out: PriceMap = {};
+  for (const [id, entry] of Object.entries(models)) {
+    out[id] = entry.price;
+  }
+  return out;
+}
+
 /**
- * Read the bundled defaults + the host profile and merge:
- *   tierMap  = { ...default, ...profile.tierOverrides }
- *   priceMap = { ...default, ...profile.priceOverrides }
- * A missing file (ENOENT) is treated as empty/null, not an error.
+ * Read bundled models.json + host profile and merge:
+ *   default = profile.default ?? file.default
+ *   models  = { ...file.models, ...profile.models }
+ * A missing host profile (ENOENT) is treated as empty, not an error.
  */
 export async function loadConfig(opts: LoadConfigOpts): Promise<Config> {
   const readFile = opts.readFile ?? defaultReadFile;
@@ -55,16 +67,32 @@ export async function loadConfig(opts: LoadConfigOpts): Promise<Config> {
     process.env.CURSOR_DELEGATE_HOST_PROFILE ??
     defaultHostProfilePath();
 
-  const [defaultTier, defaultPrice, profileRaw] = await Promise.all([
-    readJson<TierMap>(readFile, opts.tierMapPath),
-    readJson<PriceMap>(readFile, opts.priceMapPath),
+  const [fileRaw, profileRaw] = await Promise.all([
+    readJson<ModelsFile>(readFile, opts.modelsPath),
     readJson<HostProfile>(readFile, profilePath),
   ]);
 
+  if (!fileRaw || !fileRaw.models || typeof fileRaw.default !== "string") {
+    throw new Error(`invalid or missing models file: ${opts.modelsPath}`);
+  }
+
   const profile: HostProfile = profileRaw ?? {};
+  const models: Record<string, ModelEntry> = {
+    ...fileRaw.models,
+    ...(profile.models ?? {}),
+  };
+  const defaultModel = profile.default ?? fileRaw.default;
+
+  if (!(defaultModel in models)) {
+    throw new Error(
+      `default model "${defaultModel}" is not present in the models map`,
+    );
+  }
+
   return {
-    tierMap: { ...(defaultTier ?? {}), ...(profile.tierOverrides ?? {}) },
-    priceMap: { ...(defaultPrice ?? {}), ...(profile.priceOverrides ?? {}) },
+    default: defaultModel,
+    models,
+    priceMap: toPriceMap(models),
     profile,
   };
 }

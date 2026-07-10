@@ -41,10 +41,10 @@ if [ ! -f "$PROFILE" ]; then
   echo "Scaffolding minimal host profile at $PROFILE"
   run "mkdir -p '$PROFILE_DIR'"
   if [ "$DRY_RUN" != "1" ]; then
+    # Optional overrides (all keys optional): set "default" / "models" to extend or
+    # override the bundled config/models.json allow-list; the rest are host policy.
     cat > "$PROFILE" <<'JSON'
 {
-  "tierOverrides": {},
-  "priceOverrides": {},
   "requiredDeny": [],
   "promptPreamble": "",
   "verifyCommands": [],

@@ -15,8 +15,21 @@ export function verifyBlock(verifyCommands?: string[]): string | null {
 }
 
 /**
- * Compose the final prompt: [preamble?, verifyBlock?, prompt] joined by "\n\n---\n\n",
- * then strip all NUL bytes (#1 — spawn throws on a NUL in any argv entry).
+ * Standing status convention: trailing STATUS line, including NEEDS_CONTEXT for
+ * mid-run questions (question body = message text; no extra payload field).
+ */
+export function statusBlock(): string {
+  return (
+    "End your final message with a single trailing line that is exactly one of: " +
+    "STATUS: DONE, STATUS: DONE_WITH_CONCERNS, STATUS: BLOCKED, STATUS: NEEDS_CONTEXT, or STATUS: ERROR. " +
+    "When you need an answer from the orchestrator before you can proceed, put your question in the " +
+    "message body and end with STATUS: NEEDS_CONTEXT."
+  );
+}
+
+/**
+ * Compose the final prompt: [preamble?, verifyBlock?, statusBlock(), prompt] joined by
+ * "\n\n---\n\n", then strip all NUL bytes (#1 — spawn throws on a NUL in any argv entry).
  */
 export function composePrompt(opts: {
   preamble?: string;
@@ -26,6 +39,7 @@ export function composePrompt(opts: {
   const parts = [
     opts.preamble,
     verifyBlock(opts.verifyCommands),
+    statusBlock(),
     opts.prompt,
   ].filter((p): p is string => typeof p === "string" && p.length > 0);
   return parts.join(SEP).replace(/\0/g, "");

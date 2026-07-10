@@ -108,6 +108,16 @@ test("parseModelsList handles --list-models style bare ids", () => {
   );
 });
 
+test("parseModelsList skips the trailing Tip prose line", () => {
+  // Real `cursor-agent models` ends with a "Tip: use --model <id> ..." line.
+  assert.deepEqual(
+    parseModelsList(
+      "Available models\n\ncomposer-2.5 - Composer 2.5\ngrok-4.5-xhigh - Grok 4.5\n\nTip: use --model <id> (or /model <id> in interactive mode) to switch.\n",
+    ),
+    ["composer-2.5", "grok-4.5-xhigh"],
+  );
+});
+
 test("diffConfiguredModels returns configured ids missing from account", () => {
   assert.deepEqual(
     diffConfiguredModels(

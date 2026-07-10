@@ -55,7 +55,11 @@ export function parseAbout(
   };
 }
 
-const MODEL_ID_RE = /^([a-z0-9][a-z0-9._-]*)\b/i;
+// Model ids are lowercase (composer-2.5, grok-4.5-xhigh, gpt-5.5-high, ...).
+// Anchoring to a lowercase-alnum start skips prose lines — the "Available models"
+// header and the trailing "Tip: use --model <id> ..." line — without a per-line
+// denylist. (Deliberately case-sensitive: uppercase-leading lines are not ids.)
+const MODEL_ID_RE = /^([a-z0-9][a-z0-9._-]*)\b/;
 
 /**
  * Parse `cursor-agent models` / `--list-models` stdout into model ids.

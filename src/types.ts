@@ -1,7 +1,6 @@
 // All domain types for cursor-delegate.
 
 export type Capability = "ask" | "plan" | "write" | "write-unsandboxed";
-export type Tier = "cheap-bulk" | "standard" | "coding-specialist" | "diversity";
 
 export type Isolation =
   | { type: "None" }
@@ -10,8 +9,8 @@ export type Isolation =
 
 export interface RunInput {
   prompt: string;
-  tier?: Tier;
   model?: string;
+  requireNonClaude?: boolean;
   capability?: Capability;
   allowUnsandboxed?: boolean;
   session?: string;
@@ -93,12 +92,6 @@ export interface RawCursorJson {
   usage?: Usage;
 }
 
-export interface ResolvedModel {
-  backend: string;
-  model: string;
-}
-export type TierMap = Record<string, ResolvedModel>;
-
 export interface Price {
   input: number;
   output: number;
@@ -107,9 +100,21 @@ export interface Price {
 }
 export type PriceMap = Record<string, Price>;
 
+export interface ModelEntry {
+  label: string;
+  family: string;
+  price: Price;
+}
+
+export interface ResolvedModel {
+  model: string;
+  family: string;
+  price: Price;
+}
+
 export interface HostProfile {
-  tierOverrides?: TierMap;
-  priceOverrides?: PriceMap;
+  default?: string;
+  models?: Record<string, ModelEntry>;
   requiredDeny?: string[];
   promptPreamble?: string;
   verifyCommands?: string[];
@@ -119,7 +124,9 @@ export interface HostProfile {
 }
 
 export interface Config {
-  tierMap: TierMap;
+  default: string;
+  models: Record<string, ModelEntry>;
+  /** Derived from `models` at load time for `computeCost` / JobSpec. */
   priceMap: PriceMap;
   profile: HostProfile;
 }

@@ -13,24 +13,30 @@ language-specific it is called out as such.
 Code, or any MCP client) delegate coding/research tasks to **Cursor's models** by shelling out to
 the local `cursor-agent` CLI in headless (`--print`) mode.
 
-It exposes a single generic delegation tool (`cursor_run`) plus a small set of job-control tools
-(`cursor_poll`, `cursor_cancel`, `cursor_wait`, `cursor_wait_any`, `cursor_wait_all`). The value it
-adds over calling `cursor-agent` directly:
+It exposes a generic delegation tool (`cursor_run`), job-control tools (`cursor_poll`,
+`cursor_cancel`, `cursor_wait`, `cursor_wait_any`, `cursor_wait_all`), a needs-input resume tool
+(`cursor_answer`), and a diagnostics tool (`doctor`). The value it adds over calling `cursor-agent`
+directly:
 
-- **Multi-model tiering** — symbolic tiers (`cheap-bulk`, `standard`, `coding-specialist`,
-  `diversity`) resolve to concrete model ids via a config map; the caller need not hardcode model
-  names. The `diversity` tier is contractually non-Claude (uncorrelated second opinions).
+- **Curated model allow-list** — a single bundled `config/models.json` lists callable model ids with
+  labels, family tags, and hand-maintained `$/MTok` prices. A model is callable iff it is in the
+  map; the MCP `model` enum is generated from that map at startup. Optional `requireNonClaude`
+  hard-rejects when the resolved model's `family === "claude"` (no silent swap).
 - **Capability modes** — `ask` / `plan` (read-only) vs `write` / `write-unsandboxed`, each mapping
   to a vetted, non-interactive `cursor-agent` flag set.
 - **Sandboxing + a fail-closed deny-list** — write calls are refused unless the host's
   `cursor-agent` deny-list contains every required pattern.
 - **An async job model** — fast tasks return synchronously; slow tasks detach and hand back a
   `jobId` you poll/wait on. Live progress streams to the client while a call blocks.
+- **Needs-input round-trip** — delegates are instructed to end with `STATUS: NEEDS_CONTEXT` when
+  they need an orchestrator answer; the run is parked with its `sessionId` + resume context, and
+  `cursor_answer(jobId, answer)` resumes via `--resume`.
 - **Ground-truth verification** — the tool itself computes the git change-set over the run, runs an
   optional postcondition "gate" command, and surfaces stderr on failure — rather than trusting the
   agent's self-report.
 - **Same-path write serialization** — two concurrent writes to one working tree are refused, not
   interleaved.
+- **Doctor diagnostics** — probe binary, login, and allow-list drift against the account model menu.
 
 It is **local headless only**: it never spawns Cursor *cloud* (`worker`) runs and never passes a
 bare `--yolo`.
@@ -40,22 +46,25 @@ bare `--yolo`.
 ## 2. Architecture & module decomposition
 
 Pure functions for policy; one stateful module (the job registry) for process lifecycle. Every
-impure boundary (spawn, git, gate, clock, config read) is injected so it can be faked in tests.
+impure boundary (spawn, git, gate, clock, config read, doctor CLI probes) is injected so it can be
+faked in tests.
 
 ```
 MCP client (Claude Code)
    │  stdio (JSON-RPC)
    ▼
-index.ts ............ MCP server: tool list, request routing, arg validation,
+index.ts ............ MCP server: tool list (buildTools), request routing, arg validation,
    │                  progress-sink wiring, shutdown handlers
    ▼
 runner.ts ........... runDelegation(): pure pre-flight — resolve model, map capability,
    │                  verify deny-list, map isolation, compose prompt, capture HEAD,
-   │                  build a JobSpec, hand to the registry
+   │                  build a JobSpec (incl. ResumeContext), hand to the registry
+   │                  answerDelegation(): lookupAnswer → re-enter runDelegation with
+   │                  --resume <sessionId> and answer as the prompt
    ▼
 job-registry.ts ..... STATEFUL. spawn via backend, deadline-race, detach+jobId,
    │                  progress tracking, idle watchdog, write-path lock, cancel,
-   │                  poll/wait/waitAny/waitAll, shutdown killAll
+   │                  poll/wait/waitAny/waitAll, lookupAnswer, shutdown killAll
    ├── backends/cursor.ts ... spawn cursor-agent, parse stream-json (NDJSON) lines,
    │      backends/types.ts    emit "progress"/"stderr" events, resolve a BackendResult
    │   stream.ts ............. incremental stream-json parser (lastTool, tokens, files, phase)
@@ -65,21 +74,24 @@ job-registry.ts ..... STATEFUL. spawn via backend, deadline-race, detach+jobId,
           gate.ts ........... run the postcondition command (#7)
           git.ts ............ compute the real change-set (#6)
 
-Policy helpers (pure), consumed by runner.ts:
-   tiers.ts ........ tier/model → ResolvedModel (+ diversity-non-Claude contract)
+Policy helpers (pure), consumed by runner.ts / index.ts:
+   models.ts ....... model id → ResolvedModel (+ requireNonClaude hard reject)
    capability.ts ... capability → cursor-agent flags (+ unsandboxed downgrade)
    isolation.ts .... isolation → {flags, cwd}
    safety.ts ....... fail-closed deny-list verification
-   prompt.ts ....... preamble + verify-scope composition + NUL sanitization
-   pricing.ts ...... usage × price-map → best-effort USD
-   config.ts ....... load + merge default maps with the host profile
+   prompt.ts ....... preamble + verify-scope + statusBlock + NUL sanitization
+   pricing.ts ...... usage × priceMap → best-effort USD
+   config.ts ....... load models.json + host profile; derive priceMap
+   tool-schemas.ts . buildRecommendedModelsBlurb / buildRunInputSchema / buildTools
+   doctor.ts ....... parseAbout / parseModelsList / probes / runDoctor
    progress.ts ..... ProgressSink + MCP notifications/progress bridge
+   validate.ts ..... MCP cursor_run args → typed RunInput
    types.ts ........ all domain types
 ```
 
 **Dependency rule:** `runner` and the policy helpers are pure and synchronous-ish (config is async
 I/O only). All process/timer state lives in `job-registry`. `index` is the only module that touches
-the MCP transport.
+the MCP transport. `doctor` is invoked from `index` and does not touch the registry.
 
 ---
 
@@ -87,7 +99,6 @@ the MCP transport.
 
 ```ts
 type Capability = "ask" | "plan" | "write" | "write-unsandboxed";
-type Tier       = "cheap-bulk" | "standard" | "coding-specialist" | "diversity";
 
 type Isolation =
   | { type: "None" }
@@ -96,8 +107,8 @@ type Isolation =
 
 interface RunInput {
   prompt: string;              // required
-  tier?: Tier;                 // symbolic model selector
-  model?: string;              // raw model id; bypasses tier resolution
+  model?: string;              // curated allow-list id; omit → config.default
+  requireNonClaude?: boolean;  // hard-reject if resolved family === "claude"
   capability?: Capability;     // default "ask"
   allowUnsandboxed?: boolean;  // required 2nd signal for write-unsandboxed
   session?: string;            // resume a prior sessionId for continuity
@@ -128,7 +139,7 @@ interface GateResult { command: string; exitCode: number; passed: boolean; outpu
 interface RunOutput {
   status: RunStatus;
   text: string;                  // the agent's final result text
-  sessionId: string | null;      // for resume
+  sessionId: string | null;      // for resume / cursor_answer
   backend: string;               // "cursor"
   model: string;                 // resolved model id
   usage: Usage | null;
@@ -138,8 +149,9 @@ interface RunOutput {
   stderrTail?: string;           // last ~2KB, present only on failure (#3)
   changeSet?: ChangeSet;         // present when cwd is a git repo (#6)
   gateResult?: GateResult;       // present when a gate ran (#7)
-  jobId?: string;                // present when this is a detached job's terminal result (#4)
+  jobId?: string;                // always attached by finalize for registry jobs
   concerns?: string[];           // human-readable advisories (e.g. incomplete commit)
+  downgraded?: boolean;          // write-unsandboxed silently downgraded to write
 }
 
 // Raw shape emitted by the cursor-agent `result` event (verified 2026-06-09):
@@ -148,32 +160,97 @@ interface RawCursorJson {
   result?: string; session_id?: string; request_id?: string; usage?: Usage;
 }
 
-interface ResolvedModel { backend: string; model: string; }
-type TierMap  = Record<string, ResolvedModel>;
-type PriceMap = Record<string, { input; output; cacheRead; cacheWrite }>; // per-million tokens
+interface Price {
+  input: number; output: number; cacheRead: number; cacheWrite: number; // $/MTok
+}
+type PriceMap = Record<string, Price>;
+
+interface ModelEntry { label: string; family: string; price: Price; }
+
+interface ResolvedModel { model: string; family: string; price: Price; }
+
+/** Fields needed to resume a parked NEEDS_CONTEXT job via cursor_answer. */
+interface ResumeContext {
+  model: string;
+  requireNonClaude?: boolean;
+  capability: Capability;
+  allowUnsandboxed: boolean;
+  isolation: Isolation;
+  verifyCommands?: string[];
+  gate: string;                  // resolved gate string ("" = no gate)
+  allowPartialCommit: boolean;
+}
+
+interface HostProfile {
+  default?: string;              // override bundled default model id
+  models?: Record<string, ModelEntry>; // merge over bundled models
+  requiredDeny?: string[];
+  promptPreamble?: string;
+  verifyCommands?: string[];
+  gate?: string;
+  deadlineMs?: number;
+  idleMs?: number | null;
+}
+
+interface Config {
+  default: string;
+  models: Record<string, ModelEntry>;
+  priceMap: PriceMap;            // derived from models at load time
+  profile: HostProfile;
+}
+
+/** Doctor report (see section 4.8 / 8.9). */
+interface DoctorReport {
+  ok: boolean;                   // failures.length === 0
+  plugin: { version: string };
+  agent: { found: boolean; path: string | null; version: string | null; error?: string };
+  account: {
+    loggedIn: boolean;
+    email: string | null;
+    subscription: string | null; // account plan from `cursor-agent about`
+    currentModel: string | null;
+    error?: string;
+  };
+  modelMenu: {
+    configuredIds: string[];
+    accountIds: string[] | null;
+    missingFromAccount: string[];
+    pricesCheckable: false;
+    note: string;
+    error?: string;
+  };
+  warnings: string[];
+  failures: string[];
+}
 ```
 
 ---
 
 ## 4. MCP tool surface
 
-Six tools. All results are returned as a single MCP text-content block containing
-`JSON.stringify(value, null, 2)` of the structured object below.
+Eight tools. All results are returned as a single MCP text-content block containing
+`JSON.stringify(value, null, 2)` of the structured object below. Tool descriptors are built at
+startup via `buildTools(config)` — the `cursor_run` `model` enum and recommended-models blurb are
+dynamic from the allow-list.
 
 ### 4.1 `cursor_run`
-Input schema = `RunInput` (section 3); only `prompt` is required.
+Input schema = `RunInput` (section 3); only `prompt` is required. The `model` property's JSON Schema
+`enum` is the sorted allow-list ids; its description names the default. A recommended-models blurb
+(`id — label — $in/$out`, sorted by id) is rendered into the tool description.
 
 Behavior (delegates to `runDelegation` → registry `dispatch`):
-1. Resolve model from `{tier, model}`.
+1. Resolve model from `{model, requireNonClaude}` against the curated map.
 2. Map `capability` (+`allowUnsandboxed`) to flags.
 3. If a write capability → **verify deny-list** (throws/fails closed if missing).
 4. Map `isolation` to `{flags, cwd}`.
-5. Compose the prompt (preamble + verify-scope + prompt, then strip NULs).
-6. Capture `HEAD` of `cwd` (for the change-set).
-7. Build a `JobSpec` and dispatch under the deadline-race.
+5. Compose the prompt (preamble + verify-scope + statusBlock + prompt, then strip NULs).
+6. Capture `HEAD` of `cwd` (for the change-set; for `BackendProvided`, capture from server cwd /
+   `base` before the worktree exists).
+7. Build a `JobSpec` (including `ResumeContext`) and dispatch under the deadline-race.
 
 Return is one of:
-- `RunOutput` — the task finished within the deadline (`waitMs` or default 60s).
+- `RunOutput` — the task finished within the deadline (`waitMs` or default 60s). Always carries
+  `jobId` (so a foreground `NEEDS_CONTEXT` is answerable via `cursor_answer` without a detach).
 - `{ status: "RUNNING", jobId, busyPath? }` — detached; poll/wait on it. `busyPath` is set for a
   write so the caller knows which tree is locked.
 - `{ status: "BUSY", jobId, busyPath }` — refused: a write on a path with an in-flight write job.
@@ -201,8 +278,25 @@ Block until the **first** listed job reaches a terminal status (or timeout). Ret
 Block until **all** listed (known) jobs are terminal (or timeout). Returns
 `{ jobs: Record<jobId, PollResult>, allDone: boolean }`. Empty input → `{ jobs:{}, allDone:true }`.
 
+### 4.7 `cursor_answer` — input `{ jobId, answer }` (both required)
+Resume a parked `NEEDS_CONTEXT` job:
+1. `registry.lookupAnswer(jobId)` → `{ sessionId, resumeContext }` or an error.
+2. Unknown/expired `jobId` → return `{ status: "NOT_FOUND" }`.
+3. Job present but not awaiting input (`status !== "NEEDS_CONTEXT"` or missing `sessionId`) →
+   throw / reject with `"job is not awaiting an answer"`.
+4. Otherwise call `runDelegation` with `prompt: answer`, `session: sessionId`, and the stored
+   `ResumeContext` fields (`model`, `requireNonClaude`, `capability`, `allowUnsandboxed`,
+   `isolation`, `verifyCommands`, `gate`, `allowPartialCommit`). Returns the same shape as
+   `cursor_run` (terminal, `NEEDS_CONTEXT` again, or `RUNNING`/`jobId`).
+
+### 4.8 `doctor` — input `{ deep?: boolean }` (all optional; `deep` reserved and currently ignored)
+Runs `runDoctor({ config, deep })` and returns a `DoctorReport`. See section 8.9 for probe rules.
+Missing configured ids and model-menu probe errors are **warnings**; missing binary / not-logged-in
+are **failures**; `ok === (failures.length === 0)`. Prices are not CLI-checkable.
+
 > The wait/poll/cancel quartet is the public face of the async job model (#4); fan-in primitives
-> (`wait_any`/`wait_all`) pair with `background:true` for parallel dispatch.
+> (`wait_any`/`wait_all`) pair with `background:true` for parallel dispatch. `cursor_answer` is the
+> single resume path for needs-input (foreground or backgrounded).
 
 ---
 
@@ -213,19 +307,19 @@ This is the single external dependency the whole system is built around. Verifie
 
 ### 5.1 argv construction (pure)
 ```
-cursor-agent --print --output-format stream-json --trust [--approve-mcps]
+cursor-agent --print --output-format stream-json --trust --approve-mcps
              --model <model>
              <capabilityFlags...>
              <isolationFlags...>
              [--resume <sessionId>]
-             <prompt>
+             -- <prompt>
 ```
 - `--print` = headless, non-interactive.
 - `--output-format stream-json` = NDJSON event stream (NOT single-blob `json`) so progress can be
   surfaced incrementally.
 - `--trust` always appended (trust the workspace).
 - `--approve-mcps` appended by default in headless runs (auto-approve MCP servers).
-- The **prompt is the last positional arg** and the only untrusted argv entry.
+- `--` then the **prompt as the last positional arg** — the only untrusted argv entry.
 - Never emits `worker` (cloud) or a bare `--yolo`.
 
 ### 5.2 capability → flags
@@ -248,6 +342,8 @@ non-interactive, and is why the deny-list (section 7) must be present.
 | `{type:"BackendProvided", name?, base?}` | `--worktree [name] [--worktree-base <base>]` | server cwd |
 
 Only `CallerProvided` participates in the write-path lock (it names a shared working tree).
+For `BackendProvided`, `headBefore` is captured from the server repo (optionally at `base`) before
+the worktree exists; finalize later resolves the worktree path for change-set/gate.
 
 ### 5.4 stream-json events (the NDJSON the parser must understand)
 One JSON object per line. Relevant shapes:
@@ -285,12 +381,19 @@ active:    Map<jobId, Job>           // in-flight
 completed: Map<jobId, Job>           // terminal, LRU-capped at 100 (oldest evicted)
 pathLock:  Map<path, jobId>          // CallerProvided write path → in-flight write job (#8)
 ```
-`Job` holds: id, status, spec, child handle, startedAt, live progress (lastTool, tokensSoFar,
-lastAssistant, filesTouched, phase), lastEventAt, terminationReason (`CANCELLED|STALLED|null`),
-idleCancel timer handle, a `completion` promise, terminalOutput, and a `Set<ProgressSink>`.
+`Job` holds: id, status, spec (incl. `resumeContext`), child handle, startedAt, live progress
+(lastTool, tokensSoFar, lastAssistant, filesTouched, phase), lastEventAt, terminationReason
+(`CANCELLED|STALLED|null`), idleCancel timer handle, a `completion` promise, terminalOutput, and a
+`Set<ProgressSink>`.
 
 `JobStatus = RUNNING | DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT | ERROR | CANCELLED | STALLED`.
 `PollStatus = JobStatus | NOT_FOUND`.
+
+`AnswerLookup` (for `cursor_answer`):
+- `{ ok: true, sessionId, resumeContext }` when `status === "NEEDS_CONTEXT"` and
+  `terminalOutput.sessionId` is non-null
+- `{ ok: false, error: "NOT_FOUND" }` when the id is unknown/evicted
+- `{ ok: false, error: "NOT_AWAITING", status }` otherwise
 
 ### 6.2 dispatch — the deadline race
 1. **#8 guard:** if `isWrite && path && pathLock.has(path)` → return `{BUSY, jobId, busyPath}` (no
@@ -304,7 +407,8 @@ idleCancel timer handle, a `completion` promise, terminalOutput, and a `Set<Prog
 6. **If `background:true`** → drop the sink and return `{RUNNING, jobId, busyPath?}` immediately.
 7. Otherwise race three promises: `completion` vs a **deadline timer** vs the optional abort signal.
    - deadline = `clamp(waitMs)` if provided, else the configured `deadlineMs` (default 60000).
-   - Winner `done` → return the terminal `RunOutput`. Else → return `{RUNNING, jobId, busyPath?}`.
+   - Winner `done` → return the terminal `RunOutput` (includes `jobId`). Else → return
+     `{RUNNING, jobId, busyPath?}`.
    - **The deadline timer never kills the child** — it only decides sync-return vs detach.
 
 ### 6.3 Reaping (there is no fixed total-runtime cap)
@@ -318,21 +422,30 @@ Three and only three ways a job dies:
 
 ### 6.4 finalize
 On child close the backend resolves `{ raw, cleanExit, stderr }`. `finalizeJob`:
-1. `computeCost(raw.usage)` via the price map.
-2. `finalizeRun(result, ctx)` (section 8) → terminal `RunOutput`.
-3. `job.status = terminationReason ?? out.status` (so a cancelled/stalled job keeps that label),
-   store `terminalOutput`, **retire** (move to `completed`, release path lock, LRU-evict).
+1. If `terminationReason` is set (cancel/stall): build a base output via `baseOutput` (skip gate +
+   git), attach `jobId`, retire.
+2. Else `finalizeRun(result, ctx)` (section 8) → terminal `RunOutput` (always with `jobId`).
+3. `job.status = terminationReason ?? out.status` (so a cancelled/stalled job keeps that label;
+   `NEEDS_CONTEXT` is preserved for parking), store `terminalOutput`, **retire** (move to
+   `completed`, release path lock, LRU-evict).
 
 `finalizeJobError` produces a synthetic `ERROR` RunOutput (or keeps `CANCELLED`/`STALLED`).
 
-### 6.5 wait / waitAny / waitAll
+### 6.5 Needs-input parking
+Any run whose terminal status is `NEEDS_CONTEXT` is retained in `completed` like any other terminal
+job, carrying `sessionId` on `terminalOutput` and the original `ResumeContext` on `spec`. That is
+what makes `lookupAnswer` / `cursor_answer` work for both foreground and backgrounded runs. Eviction
+from the completed-LRU (cap 100) makes the jobId expire → `NOT_FOUND`.
+
+### 6.6 wait / waitAny / waitAll
 Long-poll helpers. Each registers the sink (waitAny/waitAll tag updates with the 6-char jobId
 prefix), races `completion`(s) vs a timeout vs abort, then returns poll snapshot(s). Default timeout
 120000, clamp `[1000, 600000]`. `waitAll`'s `allDone` recomputes from poll state, treating
 `NOT_FOUND` as "not blocking".
 
 > **Accepted trade-offs:** all jobs are lost on server restart; terminal jobs survive only until
-> LRU eviction (100). No persistence, no queue.
+> LRU eviction (100). No persistence, no queue. Needs-input detection leans on the model emitting
+> the trailing `STATUS:` line; the orchestrator's review of the result is the backstop.
 
 ---
 
@@ -341,26 +454,28 @@ prefix), races `completion`(s) vs a timeout vs abort, then returns poll snapshot
 ### 7.1 Files
 | file | role |
 |---|---|
-| `config/tier-map.json` (bundled) | default `Tier → ResolvedModel` |
-| `config/price-map.json` (bundled) | default per-million-token prices |
+| `config/models.json` (bundled) | curated allow-list: `{ default, models: { <id>: { label, family, price } } }` |
 | `~/.config/cursor-delegate/host-profile.json` (per machine) | overrides + policy; path overridable via `$CURSOR_DELEGATE_HOST_PROFILE` |
 | `~/.cursor/cli-config.json` (Cursor's own) | `permissions.deny` — the deny-list write calls are checked against |
 
-`loadConfig` reads the two defaults and the host profile, then merges: `tierMap =
-{...default, ...profile.tierOverrides}` (same for prices). A missing file (`ENOENT`) is treated as
-empty/`null`, not an error.
+`loadConfig({ modelsPath })` reads the bundled models file and the host profile, then merges:
+- `default = profile.default ?? file.default`
+- `models = { ...file.models, ...profile.models }`
+- `priceMap` derived from the merged `models` (each entry's `price`) for `computeCost`
+- Throws if the models file is missing/invalid, or if the merged `default` id is absent from
+  `models`. A missing host profile (`ENOENT`) is treated as empty, not an error.
 
 ### 7.2 Host profile shape
 ```jsonc
 {
-  "tierOverrides":  {},          // TierMap merged over the bundled default
-  "priceOverrides": {},          // PriceMap merged over the bundled default
-  "requiredDeny":   [],          // patterns that MUST be in cli-config deny before any write (#fail-closed)
-  "promptPreamble": "...",       // standing instructions prepended to EVERY prompt (#2)
-  "verifyCommands": [],          // default "only these verify commands" scope (#5)
-  "gate":           "",          // default postcondition command the tool runs (#7)
-  "deadlineMs":     60000,       // sync-vs-detach boundary (#4)
-  "idleMs":         180000       // idle watchdog window; null disables (#4)
+  "default":        "composer-2.5", // optional override of bundled default
+  "models":         {},             // optional ModelEntry map merged over bundled models
+  "requiredDeny":   [],             // patterns that MUST be in cli-config deny before any write (#fail-closed)
+  "promptPreamble": "...",          // standing instructions prepended to EVERY prompt (#2)
+  "verifyCommands": [],             // default "only these verify commands" scope (#5)
+  "gate":           "",             // default postcondition command the tool runs (#7)
+  "deadlineMs":     60000,          // sync-vs-detach boundary (#4)
+  "idleMs":         180000          // idle watchdog window; null disables (#4)
 }
 ```
 
@@ -372,56 +487,69 @@ Before any `write`/`write-unsandboxed` call: read `~/.cursor/cli-config.json`; i
 the deny-list — verify it exists before trusting it. The host profile and the cli-config deny-list
 are **per-machine** and must not be copied between hosts (the example patterns target one GPU host).
 
-### 7.4 Defaults shipped
+### 7.4 Defaults shipped (`config/models.json`)
 ```jsonc
-// tier-map.json
-{ "cheap-bulk":        {"backend":"cursor","model":"composer-2.5"},
-  "standard":          {"backend":"cursor","model":"gemini-3.5-flash"},
-  "coding-specialist": {"backend":"cursor","model":"composer-2.5"},
-  "diversity":         {"backend":"cursor","model":"gpt-5.5-medium"} }
-// price-map.json (USD per 1M tokens: input, output, cacheRead, cacheWrite)
-{ "composer-2.5":     {"input":0.5,"output":2.5,"cacheRead":0.2,"cacheWrite":0},
-  "gemini-3.5-flash": {"input":1.5,"output":9,  "cacheRead":0.15,"cacheWrite":0},
-  "gpt-5.5-medium":   {"input":5,  "output":30, "cacheRead":0.5, "cacheWrite":0},
-  "gpt-5.5":          {"input":5,  "output":30, "cacheRead":0.5, "cacheWrite":0} }
+{
+  "default": "composer-2.5",
+  "models": {
+    "composer-2.5":     { "label": "Composer 2.5",    "family": "composer", "price": { "input": 0.5, "output": 2.5, "cacheRead": 0.2,  "cacheWrite": 0 } },
+    "grok-4.5-xhigh":   { "label": "Grok 4.5",         "family": "grok",     "price": { "input": 2,   "output": 6,   "cacheRead": 0.5,  "cacheWrite": 0 } },
+    "gemini-3.5-flash": { "label": "Gemini 3.5 Flash", "family": "gemini",   "price": { "input": 1.5, "output": 9,   "cacheRead": 0.15, "cacheWrite": 0 } },
+    "gpt-5.5-high":     { "label": "GPT-5.5 1M High",  "family": "gpt",      "price": { "input": 5,   "output": 30,  "cacheRead": 0.5,  "cacheWrite": 0 } }
+  }
+}
 ```
+Prices are `$/MTok`, hand-maintained (the CLI exposes no pricing). `family` is a free string; the
+enforced rule only distinguishes `"claude"` from the rest. No Claude entry is seeded — nothing
+prevents adding one later. A model is callable **iff** it is in the merged map (no raw-passthrough
+escape hatch).
 
 ---
 
 ## 8. Pure-logic specifications (reimplement these exactly)
 
-### 8.1 Model resolution (`tiers.ts`)
-Order: **raw `model` override → named `tier` → default `cheap-bulk`**.
-- A raw `model` returns `{backend:"cursor", model}` directly.
-- A named tier looks up the merged tier-map; missing entry → throw.
-- **Diversity contract:** if `tier === "diversity"` and the resolved/override model matches
-  `/claude|opus|sonnet|haiku/i`, throw `DiversityClaudeError`. (Diversity must be a non-Claude
-  second opinion.)
+### 8.1 Model resolution (`models.ts`)
+`resolveModel({ model, requireNonClaude }, { default, models })`:
+1. `model = model ?? config.default`.
+2. Look up `config.models[model]`; if absent → throw `ModelNotAllowedError`.
+3. If `requireNonClaude` and `entry.family === "claude"` → throw `NonClaudeViolationError`
+   (hard reject — covers both an explicit Claude model and a Claude default; no silent swap).
+4. Return `{ model, family: entry.family, price: entry.price }`.
 
 ### 8.2 Prompt composition (`prompt.ts`)
-Join, in order, with separator `"\n\n---\n\n"`: `[preamble?, verifyBlock(verifyCommands)?, prompt]`,
-then strip all NUL bytes (`s.replace(/\0/g, "")` — `spawn` throws on a NUL in any argv entry; #1).
+Join, in order, with separator `"\n\n---\n\n"`:
+`[preamble?, verifyBlock(verifyCommands)?, statusBlock(), prompt]`, then strip all NUL bytes
+(`s.replace(/\0/g, "")` — `spawn` throws on a NUL in any argv entry; #1).
+
 `verifyBlock` renders: *"These are the ONLY verification commands you may run: `c1`, `c2`. Do not
 run workspace-wide builds (e.g. `cargo check --workspace`, full test suites) or any other build/test
 command."* (#5). Per-call `verifyCommands` overrides the profile default; same for `gate`.
 
+`statusBlock()` always injects:
+> End your final message with a single trailing line that is exactly one of: STATUS: DONE,
+> STATUS: DONE_WITH_CONCERNS, STATUS: BLOCKED, STATUS: NEEDS_CONTEXT, or STATUS: ERROR. When you
+> need an answer from the orchestrator before you can proceed, put your question in the message body
+> and end with STATUS: NEEDS_CONTEXT.
+
+The question body is the message text itself — no extra payload field. `output.ts` parses the
+trailing `STATUS:` line into `RunStatus` (including `NEEDS_CONTEXT`).
+
 ### 8.3 Status derivation (`output.ts`)
 `text = raw.result ?? ""`. Precedence:
-1. An explicit trailing `STATUS: <X>` line in `text` (regex `/STATUS:\s*([A-Z_]+)\s*$/m`, accepted
-   only if `X ∈ RunStatus`).
+1. An explicit trailing `STATUS: <X>` line in `text` (last non-empty line matching
+   `/^STATUS:\s*([A-Z_]+)\s*$/`, accepted only if `X ∈ RunStatus`).
 2. Else `raw.is_error === false && cleanExit` → `DONE`.
 3. Else `ERROR`.
 
-Agents are conventionally instructed to end with `STATUS: DONE | BLOCKED | NEEDS_CONTEXT` etc.
-
 ### 8.4 Finalize pipeline (`finalize.ts`, #3/#6/#7)
 Given `BackendResult` + context, build `RunOutput` then layer on:
-1. base via `toRunOutput`; attach `jobId` if detached.
+1. base via `toRunOutput`; attach `jobId` if present on ctx; attach `downgraded` if set.
 2. **#3** `stderrTail` = last 2048 bytes of stderr, but **only** if `!cleanExit || status==="ERROR"`
    and stderr is non-empty (keep it off the happy path).
 3. **#7** if a `gate` is set: run it (section 8.5); a failed gate downgrades a clean `DONE` →
    `DONE_WITH_CONCERNS`.
 4. **#6** compute `changeSet = gitDelta(cwd, headBefore)` (null if not a repo); attach if present.
+   For `BackendProvided`, resolve the worktree path under `cwd` first when `worktreeName` is set.
 5. **Incomplete-commit concern:** if `isWrite && newCommits>0 && uncommittedFiles>0 &&
    !allowPartialCommit` → push a human-readable concern and downgrade `DONE` →
    `DONE_WITH_CONCERNS` (HEAD may not build).
@@ -443,11 +571,43 @@ Best-effort (any git failure → `null`, never throws; uses `git -C <cwd> ...`, 
 ### 8.7 Cost (`pricing.ts`)
 Always best-effort, `costEstimated` always `true` (CLI emits no cost field). `null` if usage or a
 price entry is missing. Else `Σ(tokens_k × price_k) / 1e6` over input/output/cacheRead/cacheWrite.
-Alias: bare `gpt-5.5` → `gpt-5.5-medium` for price lookup.
+Prices come from the curated models map via the derived `priceMap` — no bare-id aliases.
 
 ### 8.8 cursor-agent binary resolution (`cursor-bin.ts`)
 Order: explicit override → `$CURSOR_AGENT_BIN` → `which cursor-agent` → fallback
 `~/.local/bin/cursor-agent`.
+
+### 8.9 Doctor (`doctor.ts`)
+Pure parsers + injectable command runner + probes assembled by `runDoctor`:
+
+**Parsers**
+- `parseAbout(stdout)` — the real CLI prints whitespace-aligned columns
+  (`Field` + 2+ spaces + `Value`), **not** `Label: value`. Match
+  `/^(\S.*?\S)\s{2,}(\S.*?)\s*$/` per line; look up (case-insensitive keys) user email, account
+  plan/subscription, and current model. (Verified against cursor-agent 2026.07 — do not switch back
+  to a colon parser.)
+- `parseModelsList(stdout)` — take the first token matching `/^([a-z0-9][a-z0-9._-]*)\b/` on each
+  non-empty line (skips "Available models" headers and uppercase-leading prose); dedupe.
+- `diffConfiguredModels(configuredIds, accountIds)` — configured ids absent from the account list,
+  sorted.
+
+**Runner:** `defaultRunAgentCommand` = promisified `execFile` (never throws; 15s timeout, 2 MiB
+buffer).
+
+**Probes**
+- `probeAgentVersion(bin)` → `cursor-agent --version`.
+- `probeAccount(bin)` → `cursor-agent about`; `loggedIn = (email !== null)`.
+- `probeModelMenu(bin, configuredIds)` → try `models`, fall back to `--list-models`; on failure
+  return `accountIds: null` + error (caller treats as warning).
+
+**`runDoctor({ config, deep?, ...injectables })`**
+- `deep` is reserved and ignored.
+- Read plugin version from `package.json` (failure → failure string).
+- Resolve bin; if not found → early return with agent/account/modelMenu skipped errors and a
+  failure.
+- Else probe version (error → failure), account (not logged in → failure), model menu (error or
+  each missing configured id → **warning**).
+- `ok = failures.length === 0`. Note that prices are not checkable via CLI.
 
 ---
 
@@ -464,23 +624,23 @@ Order: explicit override → `$CURSOR_AGENT_BIN` → `which cursor-agent` → fa
   after the last emission. (Avoids flooding the client on token-only updates.)
 
 In `index.ts`, the `progressSink` is derived per call from the MCP request's `extra` and passed to
-`dispatch`/`wait*`; `extra.signal` is forwarded as the abort signal.
+`dispatch`/`wait*`/`answerDelegation`; `extra.signal` is forwarded as the abort signal.
 
 ---
 
 ## 10. Server wiring & lifecycle (`index.ts`)
 
-- Build paths relative to the module (`dist/..` or `src/..`) to locate bundled `config/*.json`.
-- `loadConfig(...)`; read `~/.cursor/cli-config.json` (tolerate missing — fail-closed handled
-  per-call).
-- `makeJobRegistry({ backend: makeCursorAdapter(), deadlineMs: cfg.deadlineMs ?? 60000,
-  idleMs: cfg.idleMs === undefined ? 180000 : cfg.idleMs })`.
+- Build paths relative to the module (`dist/..` or `src/..`) to locate bundled `config/models.json`.
+- `loadConfig({ modelsPath })`; read `~/.cursor/cli-config.json` (tolerate missing — fail-closed
+  handled per-call).
+- `makeJobRegistry({ backend: makeCursorAdapter(), deadlineMs: cfg.profile.deadlineMs ?? 60000,
+  idleMs: cfg.profile.idleMs === undefined ? 180000 : cfg.profile.idleMs })`.
 - `deps = { config, registry, cliConfig, serverCwd: process.cwd() }`.
 - MCP `Server({name:"cursor-delegate", version:"0.1.0"}, {capabilities:{tools:{}}})`:
-  - `ListTools` → the 6 tool descriptors (rich, model-facing descriptions; see section 4 and the
-    reference `RUN_INPUT_SCHEMA`).
-  - `CallTool` → validate required field per tool, derive the progress sink + abort signal from
-    `extra`, route to the matching `handleCursor*`, wrap the result as a JSON text-content block.
+  - `ListTools` → `buildTools(deps.config)` (8 tool descriptors; dynamic `model` enum + blurb).
+  - `CallTool` → validate required fields per tool, derive the progress sink + abort signal from
+    `extra`, route via `handleCall` to `runDelegation` / registry methods / `answerDelegation` /
+    `runDoctor`, wrap the result as a JSON text-content block.
 - Shutdown: on `SIGTERM`/`SIGINT`/`exit` call `registry.killAll()`.
 - Connect a `StdioServerTransport`. Guard `main()` so importing the module in tests doesn't start
   the server (`if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1])`).
@@ -504,15 +664,23 @@ These `#N` tags appear throughout the code and this spec:
 
 ---
 
-## 12. Agent catalog (convention layer, not code)
+## 12. Agent catalog & delegate skill (convention layer, not code)
 
 `config/agents/catalog.md` documents reusable "agents" as **convention tuples over `cursor_run`** —
-the controller (the host agent) constructs each call; nothing here is Cursor-side config. The
-governing principle: *never review an agent's output with the same model that produced it.* Example
-tuples: **Verifier** (tier `diversity`, `ask`, adversarial-refute prompt), **Triager** (`cheap-bulk`,
-`ask`), **Design-critic** (`diversity`, `plan`), **Codemod**/**Re-implementer**/**SP-implementer**
-(`coding-specialist`/`cheap-bulk`, `write`, `CallerProvided`), **SP spec/quality reviewers**
-(`standard` = a different engine than the implementer). Reproduce this as documentation, not logic.
+the controller (the host agent) constructs each call; nothing here is Cursor-side config. Columns
+are `model` + `requireNonClaude` (not symbolic selectors). The governing principle: *never review an
+agent's output with the same model that produced it.* Reviewer roles pass `requireNonClaude: true`
+alongside a non-Claude allow-list model. Example tuples: **Verifier** (`gpt-5.5-high`,
+`requireNonClaude: true`, `ask`), **Triager** (`composer-2.5`, `ask`), **Design-critic**
+(`gemini-3.5-flash`, `requireNonClaude: true`, `plan`), **Codemod** / **Re-implementer** /
+**SP-implementer** (`composer-2.5` / `grok-4.5-xhigh`, `write`, `CallerProvided`), **SP
+spec/quality reviewers** (different allow-list engines from the implementer, `requireNonClaude:
+true`). Plan-writing uses `grok-4.5-xhigh` with `ask`/`plan`. Reproduce this as documentation, not
+logic.
+
+`plugin/skills/delegate/SKILL.md` (+ `reference.md`) is the orchestration playbook: when to
+delegate, model picks, the plan / `NEEDS_CONTEXT` / `cursor_answer` resume flow, and the plan-writer
+brief template. Ship it with the plugin; it is not executed by the server.
 
 ---
 
@@ -531,8 +699,9 @@ tuples: **Verifier** (tier `diversity`, `ask`, adversarial-refute prompt), **Tri
 1. Resolve **this machine's** `node` (`command -v node`) — never bake a path.
 2. Warn if `cursor-agent` not on PATH (prerequisite: installed + `cursor-agent login`).
 3. `npm install && npm run build` (`tsc` → `dist/`; pure JS, no native deps).
-4. Scaffold a **minimal** `~/.config/cursor-delegate/host-profile.json` (`requiredDeny: []`) **only
-   if absent**; never overwrite an existing profile or the cli-config deny-list.
+4. Scaffold a **minimal** `~/.config/cursor-delegate/host-profile.json` (`requiredDeny: []` and
+   empty policy defaults) **only if absent**; never overwrite an existing profile or the cli-config
+   deny-list. Optional keys `default` / `models` extend or override the bundled allow-list.
 5. Register at user scope: `claude mcp add <name> -s user -- "<node>" "<dist>/index.js"` (idempotent:
    remove-then-add). `DRY_RUN=1` previews without changes.
 
@@ -546,7 +715,7 @@ your MCP client's config directly.
   "bin": { "cursor-delegate-mcp":"dist/index.js" },
   "scripts": { "build":"tsc",
                "test":"node --import tsx --test \"tests/**/*.test.ts\"",
-               "test:live":"node --import tsx --test \"tests/**/*.live.test.ts\"" },
+               "test:live":"CURSOR_DELEGATE_LIVE=1 node --import tsx --test \"tests/**/*.live.test.ts\"" },
   "dependencies": { "@modelcontextprotocol/sdk":"^1.0.0" },
   "devDependencies": { "tsx":"^4", "typescript":"^5.6", "@types/node":"^22" } }
 ```
@@ -556,8 +725,8 @@ your MCP client's config directly.
 ---
 
 ## 14. Prerequisites (per machine, not bundled)
-1. `cursor-agent` CLI installed and logged in (`cursor-agent status`).
-2. A host profile at `~/.config/cursor-delegate/host-profile.json`.
+1. `cursor-agent` CLI installed and logged in (`cursor-agent status` / `cursor-agent about`).
+2. A host profile at `~/.config/cursor-delegate/host-profile.json` (scaffolded by setup if absent).
 3. The host deny-list merged into `~/.cursor/cli-config.json` `permissions.deny` (required for any
    write capability).
 
@@ -567,17 +736,24 @@ your MCP client's config directly.
 
 Every impurity is injected, so units test against fakes: a `spawnFn` that replays canned
 stream-json lines, a fake `Clock` (`now()` + `setTimer`) to drive deadline/idle/timeout
-deterministically, an injected `finalize`, and an in-memory config reader. There is one
-`integration.live.test.ts` (real `cursor-agent`, opt-in via `npm run test:live`). Coverage mirrors
-the module list: capability, isolation, safety, prompt, tiers, pricing, output, git, gate, stream,
-config, job-registry, cursor adapter/bin, finalize, progress, plus an `index` smoke test.
+deterministically, an injected `finalize`, and an in-memory config reader. Doctor probes take an
+injected `runCommand`. There is one live integration test (real `cursor-agent`, opt-in via
+`npm run test:live`). Coverage mirrors the module list: capability, isolation, safety, prompt,
+models, pricing, output, git, gate, stream, config, tool-schemas, doctor, job-registry (incl.
+lookupAnswer), cursor adapter/bin, finalize, progress, runner (runDelegation + answerDelegation),
+plus an `index` smoke test.
 
 Key invariants worth asserting when reproducing:
 - write capability with a missing deny pattern **throws before spawn**;
-- `diversity` + a Claude model **throws**;
+- unknown model id → `ModelNotAllowedError`; `requireNonClaude` + Claude family →
+  `NonClaudeViolationError` (no silent swap); omitted model resolves to `config.default`;
+- schema `model` enum + recommended blurb are generated from config;
 - a job that exceeds the deadline returns `{RUNNING, jobId}` and is later pollable to terminal;
 - a second write to a locked `CallerProvided` path returns `{BUSY}`;
 - idle watchdog SIGTERMs and marks `STALLED`; cancel marks `CANCELLED`; both survive finalize;
 - `stderrTail` present only on non-clean exit; `gate` failure downgrades `DONE`→`DONE_WITH_CONCERNS`;
-- incomplete-commit (commits + dirty tree) downgrades unless `allowPartialCommit`.
-```
+- incomplete-commit (commits + dirty tree) downgrades unless `allowPartialCommit`;
+- trailing `STATUS: NEEDS_CONTEXT` parks a job answerable via `cursor_answer`; unknown jobId →
+  `{NOT_FOUND}`; job not awaiting input → rejected;
+- doctor: missing binary / not-logged-in are failures; configured-but-missing menu ids are warnings;
+  `ok === failures.length === 0`.

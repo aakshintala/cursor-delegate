@@ -131,6 +131,45 @@ export interface Config {
   profile: HostProfile;
 }
 
+export interface DoctorPluginInfo {
+  version: string;
+}
+
+export interface DoctorAgentInfo {
+  found: boolean;
+  path: string | null;
+  version: string | null;
+  error?: string;
+}
+
+export interface DoctorAccountInfo {
+  loggedIn: boolean;
+  email: string | null;
+  subscription: string | null;
+  currentModel: string | null;
+  error?: string;
+}
+
+export interface DoctorModelMenuInfo {
+  configuredIds: string[];
+  accountIds: string[] | null;
+  missingFromAccount: string[];
+  /** CLI exposes no pricing; always false. */
+  pricesCheckable: false;
+  note: string;
+  error?: string;
+}
+
+export interface DoctorReport {
+  ok: boolean;
+  plugin: DoctorPluginInfo;
+  agent: DoctorAgentInfo;
+  account: DoctorAccountInfo;
+  modelMenu: DoctorModelMenuInfo;
+  warnings: string[];
+  failures: string[];
+}
+
 /** Fields needed to resume a parked NEEDS_CONTEXT job via cursor_answer. */
 export interface ResumeContext {
   model: string;

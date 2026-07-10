@@ -48,6 +48,10 @@ function fakeRegistry(): { registry: JobRegistry; calls: string[] } {
       return { jobs: {}, allDone: true };
     },
     killAll: () => {},
+    lookupAnswer: (id: string) => {
+      calls.push(`lookupAnswer:${id}`);
+      return { ok: false as const, error: "NOT_FOUND" as const };
+    },
   } as unknown as JobRegistry;
   return { registry, calls };
 }
@@ -60,9 +64,9 @@ function deps(): { deps: ServerDeps; calls: string[] } {
   };
 }
 
-test("exposes six tools from buildTools", () => {
+test("exposes seven tools from buildTools", () => {
   const tools = buildTools(config);
-  assert.equal(tools.length, 6);
+  assert.equal(tools.length, 7);
   const names = tools.map((t) => t.name);
   assert.deepEqual(names, [
     "cursor_run",
@@ -71,6 +75,7 @@ test("exposes six tools from buildTools", () => {
     "cursor_wait",
     "cursor_wait_any",
     "cursor_wait_all",
+    "cursor_answer",
   ]);
 });
 
@@ -118,6 +123,7 @@ test("routes each tool to the registry", async () => {
   await handleCall("cursor_wait", { jobId: "c" }, d);
   await handleCall("cursor_wait_any", { jobIds: ["d"] }, d);
   await handleCall("cursor_wait_all", { jobIds: ["e"] }, d);
+  await handleCall("cursor_answer", { jobId: "f", answer: "yes" }, d);
   assert.deepEqual(calls, [
     "dispatch",
     "poll:a",
@@ -125,10 +131,67 @@ test("routes each tool to the registry", async () => {
     "wait:c",
     "waitAny",
     "waitAll",
+    "lookupAnswer:f",
   ]);
 });
 
 test("an unknown tool throws", async () => {
   const { deps: d } = deps();
   await assert.rejects(() => handleCall("nope", {}, d), /unknown tool/);
+});
+
+test("cursor_answer requires jobId and answer", async () => {
+  const { deps: d } = deps();
+  await assert.rejects(
+    () => handleCall("cursor_answer", { answer: "x" }, d),
+    /jobId/,
+  );
+  await assert.rejects(
+    () => handleCall("cursor_answer", { jobId: "j1" }, d),
+    /answer/,
+  );
+});
+
+test("cursor_answer returns NOT_FOUND for unknown jobId", async () => {
+  const { deps: d, calls } = deps();
+  const res = await handleCall(
+    "cursor_answer",
+    { jobId: "missing", answer: "because v2" },
+    d,
+  );
+  assert.deepEqual(res, { status: "NOT_FOUND" });
+  assert.deepEqual(calls, ["lookupAnswer:missing"]);
+});
+
+test("cursor_answer rejects a job that is not awaiting an answer", async () => {
+  const calls: string[] = [];
+  const registry = {
+    dispatch: async () => ({ status: "RUNNING", jobId: "j1" }),
+    poll: () => ({ status: "NOT_FOUND" as const }),
+    cancel: async () => ({ status: "NOT_FOUND" as const }),
+    wait: async () => ({ status: "NOT_FOUND" as const }),
+    waitAny: async () => ({ jobs: {} }),
+    waitAll: async () => ({ jobs: {}, allDone: true }),
+    killAll: () => {},
+    lookupAnswer: (id: string) => {
+      calls.push(`lookupAnswer:${id}`);
+      return {
+        ok: false as const,
+        error: "NOT_AWAITING" as const,
+        status: "DONE" as const,
+      };
+    },
+  } as unknown as JobRegistry;
+  const d: ServerDeps = {
+    config,
+    registry,
+    cliConfig: null,
+    serverCwd: "/srv",
+  };
+  await assert.rejects(
+    () =>
+      handleCall("cursor_answer", { jobId: "j-done", answer: "x" }, d),
+    /job is not awaiting an answer/,
+  );
+  assert.deepEqual(calls, ["lookupAnswer:j-done"]);
 });

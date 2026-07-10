@@ -14,7 +14,7 @@ import {
 } from "./config.js";
 import { makeJobRegistry, type JobRegistry } from "./job-registry.js";
 import { makeCursorAdapter } from "./backends/cursor.js";
-import { runDelegation } from "./runner.js";
+import { runDelegation, answerDelegation } from "./runner.js";
 import { validateRunInput } from "./validate.js";
 import {
   progressSinkFrom,
@@ -92,6 +92,13 @@ export async function handleCall(
       return deps.registry.waitAll(
         asStringArray(args?.jobIds),
         typeof args?.timeoutMs === "number" ? args.timeoutMs : undefined,
+        { sink, signal },
+      );
+    case "cursor_answer":
+      return answerDelegation(
+        requireString(args, "jobId"),
+        requireString(args, "answer"),
+        deps,
         { sink, signal },
       );
     default:

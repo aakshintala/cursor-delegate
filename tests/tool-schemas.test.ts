@@ -46,7 +46,7 @@ test("run input schema enum is the allow-list ids", () => {
 
 test("buildTools wires cursor_run description with blurb and default", () => {
   const tools = buildTools(config);
-  assert.equal(tools.length, 6);
+  assert.equal(tools.length, 7);
   const run = tools.find((t) => t.name === "cursor_run");
   assert.ok(run);
   assert.match(run!.description, /composer-2\.5 — Composer 2\.5/);
@@ -65,6 +65,21 @@ test("buildTools wires cursor_run description with blurb and default", () => {
       "cursor_wait",
       "cursor_wait_any",
       "cursor_wait_all",
+      "cursor_answer",
     ],
   );
+});
+
+test("cursor_answer schema requires jobId and answer", () => {
+  const tools = buildTools(config);
+  const answer = tools.find((t) => t.name === "cursor_answer");
+  assert.ok(answer);
+  const schema = answer!.inputSchema as {
+    required: string[];
+    properties: { jobId: { type: string }; answer: { type: string } };
+  };
+  assert.deepEqual(schema.required, ["jobId", "answer"]);
+  assert.equal(schema.properties.jobId.type, "string");
+  assert.equal(schema.properties.answer.type, "string");
+  assert.match(answer!.description, /NEEDS_CONTEXT/);
 });

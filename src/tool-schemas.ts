@@ -1,4 +1,4 @@
-// JSON Schemas + descriptions for the six MCP tools (model-facing).
+// JSON Schemas + descriptions for the MCP tools (model-facing).
 
 import type { Config, ModelEntry } from "./types.js";
 
@@ -132,6 +132,23 @@ const WAIT_SCHEMA = {
   required: ["jobId"],
 } as const;
 
+const ANSWER_SCHEMA = {
+  type: "object",
+  properties: {
+    jobId: {
+      type: "string",
+      description:
+        "jobId of a parked run that ended with status NEEDS_CONTEXT.",
+    },
+    answer: {
+      type: "string",
+      description:
+        "Orchestrator answer to the delegated agent's question (becomes the resume prompt).",
+    },
+  },
+  required: ["jobId", "answer"],
+} as const;
+
 export function buildTools(config: Pick<Config, "default" | "models">) {
   const blurb = buildRecommendedModelsBlurb(config.models);
   const runSchema = buildRunInputSchema(config);
@@ -175,6 +192,16 @@ export function buildTools(config: Pick<Config, "default" | "models">) {
       description:
         "Block until ALL listed (known) jobs are terminal (or timeout). Returns {jobs, allDone}. Empty input -> {jobs:{}, allDone:true}.",
       inputSchema: JOB_IDS_TIMEOUT_SCHEMA,
+    },
+    {
+      name: "cursor_answer",
+      description:
+        "Resume a parked NEEDS_CONTEXT job: look up its sessionId and original run context " +
+        "(isolation, capability, verifyCommands, gate, model), then continue via " +
+        "--resume <sessionId> with `answer` as the prompt. Returns the same shape as " +
+        "cursor_run (terminal, NEEDS_CONTEXT again, or RUNNING/jobId). " +
+        "Unknown/expired jobId → {status:'NOT_FOUND'}; a job not awaiting input is rejected.",
+      inputSchema: ANSWER_SCHEMA,
     },
   ];
 }

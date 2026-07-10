@@ -1,11 +1,4 @@
-import type { Capability, Isolation, RunInput, Tier } from "./types.js";
-
-const TIERS: Tier[] = [
-  "cheap-bulk",
-  "standard",
-  "coding-specialist",
-  "diversity",
-];
+import type { Capability, Isolation, RunInput } from "./types.js";
 
 const CAPABILITIES: Capability[] = [
   "ask",
@@ -60,18 +53,18 @@ export function validateRunInput(args: Record<string, unknown>): RunInput {
 
   const input: RunInput = { prompt };
 
-  if (args.tier !== undefined) {
-    if (typeof args.tier !== "string" || !TIERS.includes(args.tier as Tier)) {
-      invalid("tier");
-    }
-    input.tier = args.tier as Tier;
-  }
-
   if (args.model !== undefined) {
     if (typeof args.model !== "string" || args.model.length === 0) {
       invalid("model");
     }
     input.model = args.model;
+  }
+
+  if (args.requireNonClaude !== undefined) {
+    if (typeof args.requireNonClaude !== "boolean") {
+      invalid("requireNonClaude", "must be a boolean");
+    }
+    input.requireNonClaude = args.requireNonClaude;
   }
 
   if (args.capability !== undefined) {

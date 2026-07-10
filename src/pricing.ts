@@ -5,7 +5,7 @@ const n = (x: number | undefined): number => (typeof x === "number" ? x : 0);
 /**
  * Best-effort USD cost. Always estimated (the CLI emits no cost field).
  * Returns null when usage or a price entry is missing.
- * Alias: bare `gpt-5.5` falls back to `gpt-5.5-medium` for price lookup.
+ * Prices come from the curated models map (no bare-id aliases).
  */
 export function computeCost(
   usage: Usage | null | undefined,
@@ -13,9 +13,7 @@ export function computeCost(
   model: string,
 ): number | null {
   if (!usage) return null;
-  const price =
-    priceMap[model] ??
-    (model === "gpt-5.5" ? priceMap["gpt-5.5-medium"] : undefined);
+  const price = priceMap[model];
   if (!price) return null;
   return (
     (n(usage.inputTokens) * price.input +

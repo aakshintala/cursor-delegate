@@ -1,10 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildArgv, runDelegation, type RunnerDeps } from "../src/runner.js";
+import {
+  buildArgv,
+  runDelegation,
+  answerDelegation,
+  type RunnerDeps,
+} from "../src/runner.js";
 import { DenyListError } from "../src/safety.js";
 import { NonClaudeViolationError } from "../src/models.js";
-import type { JobSpec, Config, DispatchResult } from "../src/types.js";
+import type { AnswerLookup } from "../src/job-registry.js";
 import type { JobRegistry } from "../src/job-registry.js";
+import type {
+  JobSpec,
+  Config,
+  DispatchResult,
+  ResumeContext,
+} from "../src/types.js";
 
 const config: Config = {
   default: "composer-2.5",
@@ -260,4 +271,75 @@ test("JobSpec.resumeContext defaults capability ask and profile gate", async () 
   assert.equal(ctx.allowPartialCommit, false);
   assert.equal(ctx.verifyCommands, undefined);
   assert.equal(ctx.requireNonClaude, undefined);
+});
+
+function registryWithLookup(
+  lookup: (jobId: string) => AnswerLookup,
+): { registry: JobRegistry; last: () => JobSpec } {
+  let captured: JobSpec | undefined;
+  const registry = {
+    dispatch: async (spec: JobSpec): Promise<DispatchResult> => {
+      captured = spec;
+      return { status: "RUNNING", jobId: "j-resume" };
+    },
+    lookupAnswer: lookup,
+  } as unknown as JobRegistry;
+  return { registry, last: () => captured! };
+}
+
+const parkedCtx: ResumeContext = {
+  model: "grok-4.5-xhigh",
+  requireNonClaude: true,
+  capability: "write",
+  allowUnsandboxed: false,
+  isolation: { type: "CallerProvided", path: "/repo" },
+  verifyCommands: ["x test"],
+  gate: "custom-gate",
+  allowPartialCommit: false,
+};
+
+test("answerDelegation resumes with --resume and original run context", async () => {
+  const { registry, last } = registryWithLookup(() => ({
+    ok: true,
+    sessionId: "sess-9",
+    resumeContext: parkedCtx,
+  }));
+  const deps = depsWith(registry, ["rm -rf /"]);
+  const res = await answerDelegation("job-1", "use v2", deps);
+  assert.equal((res as { status: string }).status, "RUNNING");
+  const spec = last();
+  assert.ok(spec.argv.includes("--resume"));
+  assert.equal(spec.argv[spec.argv.indexOf("--resume") + 1], "sess-9");
+  assert.equal(spec.argv[spec.argv.length - 1].includes("use v2"), true);
+  assert.equal(spec.model, "grok-4.5-xhigh");
+  assert.equal(spec.isWrite, true);
+  assert.equal(spec.cwd, "/repo");
+  assert.equal(spec.path, "/repo");
+  assert.equal(spec.gate, "custom-gate");
+  assert.deepEqual(spec.resumeContext.isolation, {
+    type: "CallerProvided",
+    path: "/repo",
+  });
+  assert.deepEqual(spec.resumeContext.verifyCommands, ["x test"]);
+});
+
+test("answerDelegation returns NOT_FOUND for unknown jobId", async () => {
+  const { registry } = registryWithLookup(() => ({
+    ok: false,
+    error: "NOT_FOUND",
+  }));
+  const res = await answerDelegation("missing", "x", depsWith(registry, []));
+  assert.deepEqual(res, { status: "NOT_FOUND" });
+});
+
+test("answerDelegation rejects a job that is not awaiting an answer", async () => {
+  const { registry } = registryWithLookup(() => ({
+    ok: false,
+    error: "NOT_AWAITING",
+    status: "DONE",
+  }));
+  await assert.rejects(
+    () => answerDelegation("job-done", "x", depsWith(registry, [])),
+    /job is not awaiting an answer/,
+  );
 });

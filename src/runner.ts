@@ -143,3 +143,40 @@ export async function runDelegation(
 
   return deps.registry.dispatch(spec, opts);
 }
+
+/**
+ * Resume a parked NEEDS_CONTEXT job: look up sessionId + ResumeContext, then
+ * re-enter runDelegation with answer as the prompt and --resume <sessionId>.
+ */
+export async function answerDelegation(
+  jobId: string,
+  answer: string,
+  deps: RunnerDeps,
+  opts: DispatchOpts = {},
+): Promise<DispatchResult | { status: "NOT_FOUND" }> {
+  const looked = deps.registry.lookupAnswer(jobId);
+  if (!looked.ok) {
+    if (looked.error === "NOT_FOUND") return { status: "NOT_FOUND" };
+    throw new Error("job is not awaiting an answer");
+  }
+
+  const ctx = looked.resumeContext;
+  return runDelegation(
+    {
+      prompt: answer,
+      session: looked.sessionId,
+      model: ctx.model,
+      requireNonClaude: ctx.requireNonClaude,
+      capability: ctx.capability,
+      allowUnsandboxed: ctx.allowUnsandboxed,
+      isolation: ctx.isolation,
+      verifyCommands: ctx.verifyCommands,
+      // Resolved gate string from the original run ("" = no gate). `??` in
+      // runDelegation preserves "" and does not re-apply the profile default.
+      gate: ctx.gate,
+      allowPartialCommit: ctx.allowPartialCommit,
+    },
+    deps,
+    opts,
+  );
+}

@@ -219,3 +219,45 @@ test("per-call gate and verifyCommands override the profile defaults", async () 
   assert.equal(spec.gate, "custom-gate");
   assert.match(spec.argv[spec.argv.length - 1], /ONLY verification commands/);
 });
+
+test("JobSpec.resumeContext captures isolation, capability, verifyCommands, gate, model", async () => {
+  const { registry, last } = fakeRegistry();
+  await runDelegation(
+    {
+      prompt: "plan it",
+      model: "grok-4.5-xhigh",
+      requireNonClaude: true,
+      capability: "plan",
+      isolation: { type: "CallerProvided", path: "/repo" },
+      verifyCommands: ["x test"],
+      gate: "custom-gate",
+      allowPartialCommit: true,
+    },
+    depsWith(registry, []),
+  );
+  const spec = last();
+  assert.deepEqual(spec.resumeContext, {
+    model: "grok-4.5-xhigh",
+    requireNonClaude: true,
+    capability: "plan",
+    allowUnsandboxed: false,
+    isolation: { type: "CallerProvided", path: "/repo" },
+    verifyCommands: ["x test"],
+    gate: "custom-gate",
+    allowPartialCommit: true,
+  });
+});
+
+test("JobSpec.resumeContext defaults capability ask and profile gate", async () => {
+  const { registry, last } = fakeRegistry();
+  await runDelegation({ prompt: "do it" }, depsWith(registry, []));
+  const ctx = last().resumeContext;
+  assert.equal(ctx.model, "composer-2.5");
+  assert.equal(ctx.capability, "ask");
+  assert.equal(ctx.allowUnsandboxed, false);
+  assert.deepEqual(ctx.isolation, { type: "None" });
+  assert.equal(ctx.gate, "make ci");
+  assert.equal(ctx.allowPartialCommit, false);
+  assert.equal(ctx.verifyCommands, undefined);
+  assert.equal(ctx.requireNonClaude, undefined);
+});

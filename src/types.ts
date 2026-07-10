@@ -131,6 +131,18 @@ export interface Config {
   profile: HostProfile;
 }
 
+/** Fields needed to resume a parked NEEDS_CONTEXT job via cursor_answer. */
+export interface ResumeContext {
+  model: string;
+  requireNonClaude?: boolean;
+  capability: Capability;
+  allowUnsandboxed: boolean;
+  isolation: Isolation;
+  verifyCommands?: string[];
+  gate: string;
+  allowPartialCommit: boolean;
+}
+
 // The fully-resolved unit of work handed from runner to registry/backend.
 export interface JobSpec {
   bin: string;
@@ -149,6 +161,8 @@ export interface JobSpec {
   downgraded: boolean;
   /** Set for BackendProvided isolation; used to resolve the worktree for change-set tracking. */
   worktreeName?: string;
+  /** Original run knobs for cursor_answer resume. */
+  resumeContext: ResumeContext;
 }
 
 export type JobStatus =

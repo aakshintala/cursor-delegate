@@ -143,6 +143,14 @@ export function specOf(over: Partial<JobSpec> = {}): JobSpec {
     allowPartialCommit: false,
     priceMap: {},
     downgraded: false,
+    resumeContext: {
+      model: "composer-2.5",
+      capability: "ask",
+      allowUnsandboxed: false,
+      isolation: { type: "None" },
+      gate: "",
+      allowPartialCommit: false,
+    },
     ...over,
   };
 }

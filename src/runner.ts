@@ -1,4 +1,10 @@
-import type { Config, DispatchResult, JobSpec, RunInput } from "./types.js";
+import type {
+  Config,
+  DispatchResult,
+  JobSpec,
+  ResumeContext,
+  RunInput,
+} from "./types.js";
 import type { CliConfig } from "./safety.js";
 import type { JobRegistry, DispatchOpts } from "./job-registry.js";
 import { resolveModel } from "./models.js";
@@ -58,13 +64,18 @@ export async function runDelegation(
     { default: config.default, models: config.models },
   );
 
-  const cap = mapCapability(input.capability ?? "ask", input.allowUnsandboxed ?? false);
+  const capability = input.capability ?? "ask";
+  const allowUnsandboxed = input.allowUnsandboxed ?? false;
+  const isolation = input.isolation ?? { type: "None" as const };
+  const allowPartialCommit = input.allowPartialCommit ?? false;
+
+  const cap = mapCapability(capability, allowUnsandboxed);
 
   if (cap.isWrite) {
     verifyDenyList(config.profile.requiredDeny ?? [], deps.cliConfig);
   }
 
-  const iso = mapIsolation(input.isolation ?? { type: "None" }, deps.serverCwd);
+  const iso = mapIsolation(isolation, deps.serverCwd);
 
   const prompt = composePrompt({
     preamble: config.profile.promptPreamble,
@@ -75,7 +86,6 @@ export async function runDelegation(
   const gate = input.gate ?? config.profile.gate ?? "";
 
   const captureHeadFn = deps.captureHead ?? captureHead;
-  const isolation = input.isolation ?? { type: "None" as const };
   let headBefore: string | null;
   let worktreeName: string | undefined;
   if (isolation.type === "BackendProvided") {
@@ -97,6 +107,21 @@ export async function runDelegation(
     prompt,
   });
 
+  const resumeContext: ResumeContext = {
+    model: resolved.model,
+    capability,
+    allowUnsandboxed,
+    isolation,
+    gate,
+    allowPartialCommit,
+  };
+  if (input.requireNonClaude !== undefined) {
+    resumeContext.requireNonClaude = input.requireNonClaude;
+  }
+  if (input.verifyCommands !== undefined) {
+    resumeContext.verifyCommands = input.verifyCommands;
+  }
+
   const spec: JobSpec = {
     bin,
     argv,
@@ -107,12 +132,13 @@ export async function runDelegation(
     path: iso.path,
     headBefore,
     gate,
-    allowPartialCommit: input.allowPartialCommit ?? false,
+    allowPartialCommit,
     waitMs: input.waitMs,
     background: input.background,
     priceMap: config.priceMap,
     downgraded: cap.downgraded,
     worktreeName,
+    resumeContext,
   };
 
   return deps.registry.dispatch(spec, opts);

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { Backend, BackendResult } from "../src/backends/types.js";
 import type { Clock, TimerHandle } from "../src/job-registry.js";
+import { deriveStatus } from "../src/output.js";
 import type { JobSpec } from "../src/types.js";
 
 /** Flush pending microtasks/immediates. */
@@ -113,10 +114,7 @@ export const fakeFinalize = async (
   res: BackendResult,
   ctx: { backend: string; model: string; jobId?: string },
 ) => ({
-  status:
-    res.cleanExit && res.raw.is_error === false
-      ? ("DONE" as const)
-      : ("ERROR" as const),
+  status: deriveStatus(res.raw.result ?? "", res.raw.is_error, res.cleanExit),
   text: res.raw.result ?? "",
   sessionId: res.raw.session_id ?? null,
   backend: ctx.backend,

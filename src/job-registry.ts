@@ -6,6 +6,7 @@ import type {
   JobSpec,
   JobStatus,
   PollResult,
+  ResumeContext,
   RunOutput,
 } from "./types.js";
 import type { Backend, BackendResult, ProgressSnapshotRaw } from "./backends/types.js";
@@ -59,6 +60,11 @@ export interface WaitOpts {
   signal?: AbortSignal;
 }
 
+export type AnswerLookup =
+  | { ok: true; sessionId: string; resumeContext: ResumeContext }
+  | { ok: false; error: "NOT_FOUND" }
+  | { ok: false; error: "NOT_AWAITING"; status: JobStatus };
+
 export interface JobRegistry {
   dispatch(spec: JobSpec, opts?: DispatchOpts): Promise<DispatchResult>;
   poll(jobId: string): PollResult;
@@ -75,6 +81,7 @@ export interface JobRegistry {
     opts?: WaitOpts,
   ): Promise<{ jobs: Record<string, PollResult>; allDone: boolean }>;
   killAll(): void;
+  lookupAnswer(jobId: string): AnswerLookup;
 }
 
 export interface RegistryDeps {
@@ -327,6 +334,20 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     };
   }
 
+  function lookupAnswer(jobId: string): AnswerLookup {
+    const job = getJob(jobId);
+    if (!job) return { ok: false, error: "NOT_FOUND" };
+    const sessionId = job.terminalOutput?.sessionId ?? null;
+    if (job.status !== "NEEDS_CONTEXT" || !sessionId) {
+      return { ok: false, error: "NOT_AWAITING", status: job.status };
+    }
+    return {
+      ok: true,
+      sessionId,
+      resumeContext: job.spec.resumeContext,
+    };
+  }
+
   async function cancel(jobId: string): Promise<PollResult> {
     const job = active.get(jobId);
     if (!job) return poll(jobId);
@@ -478,5 +499,5 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     }
   }
 
-  return { dispatch, poll, cancel, wait, waitAny, waitAll, killAll };
+  return { dispatch, poll, cancel, wait, waitAny, waitAll, killAll, lookupAnswer };
 }

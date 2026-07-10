@@ -238,3 +238,78 @@ test("cancel skips finalize side effects", async () => {
   assert.equal(registry.poll(jobId(r)).status, "CANCELLED");
   assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
 });
+
+const needsContextOk: BackendResult = {
+  raw: {
+    result: "Which API version should I target?\nSTATUS: NEEDS_CONTEXT",
+    is_error: false,
+    session_id: "sess-park-1",
+  },
+  cleanExit: true,
+  stderr: "",
+};
+
+test("foreground NEEDS_CONTEXT returns RunOutput with jobId and parks the job", async () => {
+  const { registry, handles } = setup();
+  const p = registry.dispatch(specOf());
+  handles[0].finish(needsContextOk);
+  const res = (await p) as RunOutput;
+  assert.equal(res.status, "NEEDS_CONTEXT");
+  assert.ok(typeof res.jobId === "string" && res.jobId.length > 0);
+  assert.equal(res.sessionId, "sess-park-1");
+  assert.match(res.text, /Which API version/);
+
+  const looked = registry.lookupAnswer(res.jobId!);
+  assert.equal(looked.ok, true);
+  if (looked.ok) {
+    assert.equal(looked.sessionId, "sess-park-1");
+    assert.equal(looked.resumeContext.model, "composer-2.5");
+  }
+});
+
+test("lookupAnswer returns NOT_FOUND for unknown or expired ids", () => {
+  const { registry } = setup();
+  assert.deepEqual(registry.lookupAnswer("nope"), {
+    ok: false,
+    error: "NOT_FOUND",
+  });
+});
+
+test("lookupAnswer rejects jobs that are not awaiting an answer", async () => {
+  const { registry, handles } = setup();
+  const p = registry.dispatch(specOf({ background: true }));
+  const id = jobId(await p);
+  assert.deepEqual(registry.lookupAnswer(id), {
+    ok: false,
+    error: "NOT_AWAITING",
+    status: "RUNNING",
+  });
+
+  handles[0].finish(doneOk);
+  await flush();
+  assert.deepEqual(registry.lookupAnswer(id), {
+    ok: false,
+    error: "NOT_AWAITING",
+    status: "DONE",
+  });
+});
+
+test("lookupAnswer rejects NEEDS_CONTEXT jobs that lack a sessionId", async () => {
+  const { registry, handles } = setup();
+  const p = registry.dispatch(specOf());
+  handles[0].finish({
+    raw: {
+      result: "Need a choice\nSTATUS: NEEDS_CONTEXT",
+      is_error: false,
+    },
+    cleanExit: true,
+    stderr: "",
+  });
+  const res = (await p) as RunOutput;
+  assert.equal(res.status, "NEEDS_CONTEXT");
+  assert.deepEqual(registry.lookupAnswer(res.jobId!), {
+    ok: false,
+    error: "NOT_AWAITING",
+    status: "NEEDS_CONTEXT",
+  });
+});

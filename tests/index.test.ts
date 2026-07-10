@@ -1,13 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, handleCall, type ServerDeps } from "../src/index.js";
-import { TOOLS } from "../src/tool-schemas.js";
+import { buildTools } from "../src/tool-schemas.js";
 import type { JobRegistry } from "../src/job-registry.js";
 import type { Config } from "../src/types.js";
 
 const config: Config = {
-  tierMap: { "cheap-bulk": { backend: "cursor", model: "composer-2.5" } },
-  priceMap: {},
+  default: "composer-2.5",
+  models: {
+    "composer-2.5": {
+      label: "Composer 2.5",
+      family: "composer",
+      price: { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    },
+  },
+  priceMap: {
+    "composer-2.5": { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+  },
   profile: {},
 };
 
@@ -51,9 +60,10 @@ function deps(): { deps: ServerDeps; calls: string[] } {
   };
 }
 
-test("exposes six tools", () => {
-  assert.equal(TOOLS.length, 6);
-  const names = TOOLS.map((t) => t.name);
+test("exposes six tools from buildTools", () => {
+  const tools = buildTools(config);
+  assert.equal(tools.length, 6);
+  const names = tools.map((t) => t.name);
   assert.deepEqual(names, [
     "cursor_run",
     "cursor_poll",

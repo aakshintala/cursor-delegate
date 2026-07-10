@@ -21,7 +21,7 @@ import {
   type McpExtra,
   type ProgressSink,
 } from "./progress.js";
-import { TOOLS } from "./tool-schemas.js";
+import { buildTools } from "./tool-schemas.js";
 
 export interface ServerDeps {
   config: Awaited<ReturnType<typeof loadConfig>>;
@@ -106,8 +106,10 @@ export function createServer(deps: ServerDeps): Server {
     { capabilities: { tools: {} } },
   );
 
+  const tools = buildTools(deps.config);
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map((t) => ({
+    tools: tools.map((t) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema,
@@ -133,8 +135,7 @@ export async function buildDeps(): Promise<ServerDeps> {
   const configDir = join(here, "..", "config");
 
   const config = await loadConfig({
-    tierMapPath: join(configDir, "tier-map.json"),
-    priceMapPath: join(configDir, "price-map.json"),
+    modelsPath: join(configDir, "models.json"),
   });
   const cliConfig = await loadCliConfig(defaultCliConfigPath());
 

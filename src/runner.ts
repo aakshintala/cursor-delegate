@@ -1,7 +1,7 @@
 import type { Config, DispatchResult, JobSpec, RunInput } from "./types.js";
 import type { CliConfig } from "./safety.js";
 import type { JobRegistry, DispatchOpts } from "./job-registry.js";
-import { resolveModel } from "./tiers.js";
+import { resolveModel } from "./models.js";
 import { mapCapability } from "./capability.js";
 import { mapIsolation } from "./isolation.js";
 import { verifyDenyList } from "./safety.js";
@@ -54,8 +54,8 @@ export async function runDelegation(
   const { config } = deps;
 
   const resolved = resolveModel(
-    { tier: input.tier, model: input.model },
-    config.tierMap,
+    { model: input.model, requireNonClaude: input.requireNonClaude },
+    { default: config.default, models: config.models },
   );
 
   const cap = mapCapability(input.capability ?? "ask", input.allowUnsandboxed ?? false);
@@ -102,7 +102,7 @@ export async function runDelegation(
     argv,
     cwd: iso.cwd,
     model: resolved.model,
-    backend: resolved.backend,
+    backend: "cursor",
     isWrite: cap.isWrite,
     path: iso.path,
     headBefore,

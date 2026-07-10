@@ -2,17 +2,39 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildArgv, runDelegation, type RunnerDeps } from "../src/runner.js";
 import { DenyListError } from "../src/safety.js";
-import { DiversityClaudeError } from "../src/tiers.js";
+import { NonClaudeViolationError } from "../src/models.js";
 import type { JobSpec, Config, DispatchResult } from "../src/types.js";
 import type { JobRegistry } from "../src/job-registry.js";
 
 const config: Config = {
-  tierMap: {
-    "cheap-bulk": { backend: "cursor", model: "composer-2.5" },
-    diversity: { backend: "cursor", model: "gpt-5.5-medium" },
+  default: "composer-2.5",
+  models: {
+    "composer-2.5": {
+      label: "Composer 2.5",
+      family: "composer",
+      price: { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    },
+    "grok-4.5-xhigh": {
+      label: "Grok 4.5",
+      family: "grok",
+      price: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    },
+    "claude-sonnet-4": {
+      label: "Claude Sonnet 4",
+      family: "claude",
+      price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+    },
   },
-  priceMap: {},
-  profile: { promptPreamble: "PREAMBLE", requiredDeny: ["rm -rf /"], gate: "make ci" },
+  priceMap: {
+    "composer-2.5": { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    "grok-4.5-xhigh": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    "claude-sonnet-4": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+  },
+  profile: {
+    promptPreamble: "PREAMBLE",
+    requiredDeny: ["rm -rf /"],
+    gate: "make ci",
+  },
 };
 
 function fakeRegistry(): { registry: JobRegistry; last: () => JobSpec } {
@@ -116,15 +138,19 @@ test("a write with a missing deny pattern throws before dispatch", async () => {
   );
 });
 
-test("diversity + a Claude model throws", async () => {
+test("requireNonClaude + a Claude model throws", async () => {
   const { registry } = fakeRegistry();
   await assert.rejects(
     () =>
       runDelegation(
-        { prompt: "x", tier: "diversity", model: "claude-opus" },
+        {
+          prompt: "x",
+          model: "claude-sonnet-4",
+          requireNonClaude: true,
+        },
         depsWith(registry, []),
       ),
-    DiversityClaudeError,
+    NonClaudeViolationError,
   );
 });
 

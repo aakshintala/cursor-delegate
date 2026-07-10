@@ -17,8 +17,7 @@ const configDir = join(here, "..", "config");
 // which sets CURSOR_DELEGATE_LIVE=1.
 test("live: an ask task returns a terminal RunOutput", { skip: !process.env.CURSOR_DELEGATE_LIVE }, async () => {
   const config = await loadConfig({
-    tierMapPath: join(configDir, "tier-map.json"),
-    priceMapPath: join(configDir, "price-map.json"),
+    modelsPath: join(configDir, "models.json"),
   });
   const registry = makeJobRegistry({
     backend: makeCursorAdapter(),
@@ -30,7 +29,7 @@ test("live: an ask task returns a terminal RunOutput", { skip: !process.env.CURS
     {
       prompt:
         "Reply with exactly the word OK and then a final line 'STATUS: DONE'. Do not run any commands.",
-      tier: "cheap-bulk",
+      model: "composer-2.5",
       capability: "ask",
       waitMs: 120000,
     },

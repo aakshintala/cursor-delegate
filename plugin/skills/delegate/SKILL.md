@@ -25,7 +25,7 @@ Delegate when the work is:
 
 - **Token-heavy plan authoring** after you (or the user) already have a spec —
   the driving use case: brainstorm/spec stays with you; detailed plan-writing goes
-  to `grok-4.5-xhigh`.
+  to `cursor-grok-4.5-high`.
 - **Mechanical or well-scoped coding** (codemod, single planned task, rebuild from
   a clear spec).
 - **Uncorrelated review** (refute a claim, critique a design, review a spec or
@@ -43,8 +43,8 @@ Allow-list ids only (server rejects anything else):
 | Intent | `model` | `requireNonClaude` |
 |---|---|---|
 | Bulk / cheap / default | `composer-2.5` | `false` (omit) |
-| Plan-writing / strong coding | `grok-4.5-xhigh` | `false` (omit) |
-| Diverse review (uncorrelated) | `gemini-3.5-flash` or `gpt-5.5-high` | `true` |
+| Plan-writing / strong coding | `cursor-grok-4.5-high` | `false` (omit) |
+| Diverse review (uncorrelated) | `gemini-3.5-flash`, `gpt-5.6-sol-high`, or `gpt-5.6-terra-high` | `true` |
 
 Omit `model` only when `composer-2.5` is acceptable — that is the server default.
 
@@ -59,7 +59,7 @@ Minimum shape:
 ```json
 {
   "prompt": "<task for the Cursor agent>",
-  "model": "grok-4.5-xhigh",
+  "model": "cursor-grok-4.5-high",
   "capability": "ask"
 }
 ```
@@ -109,7 +109,7 @@ backstop — especially for delegated plans.
 2. Build the prompt from the **PLAN-WRITER BRIEF TEMPLATE** in
    [reference.md](./reference.md) — fill every placeholder; do not send an empty
    template.
-3. `cursor_run` with `model: "grok-4.5-xhigh"`, `capability: "ask"` or `"plan"`
+3. `cursor_run` with `model: "cursor-grok-4.5-high"`, `capability: "ask"` or `"plan"`
    (read-only plan authoring; use `write` only if the plan must be written into the
    repo by the delegate).
 4. On `NEEDS_CONTEXT`, answer via `cursor_answer` and continue until `DONE` /

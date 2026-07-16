@@ -7,7 +7,7 @@ plan-writing brief or when you need a fully filled example.
 
 Copy everything inside the fence into `cursor_run.prompt` after replacing
 placeholders (`«...»`). Do not leave placeholders unfilled. Use
-`model: "grok-4.5-xhigh"` unless the user explicitly overrides with another
+`model: "cursor-grok-4.5-high"` unless the user explicitly overrides with another
 allow-list id.
 
 ```text
@@ -173,8 +173,8 @@ Start the plan with this header shape (fill Goal / Architecture / Tech Stack):
 ## Global Constraints
 
 - Scope only design-spec §8 (skill + catalog). Model layer, needs-input, and doctor are already implemented — document them, do not build them.
-- Allow-list ids: composer-2.5, grok-4.5-xhigh, gemini-3.5-flash, gpt-5.5-high.
-- Model picks: composer-2.5 bulk; grok-4.5-xhigh plan-writing/coding; gemini-3.5-flash / gpt-5.5-high diverse review with requireNonClaude: true.
+- Allow-list ids: composer-2.5, cursor-grok-4.5-high, gemini-3.5-flash, gpt-5.6-sol-high, gpt-5.6-terra-high.
+- Model picks: composer-2.5 bulk; cursor-grok-4.5-high plan-writing/coding; gemini-3.5-flash / gpt-5.6-sol-high / gpt-5.6-terra-high diverse review with requireNonClaude: true.
 - Catalog: map roles to model + requireNonClaude columns; keep governing principle.
 - No unit tests; use verification steps. Commit after each task.
 
@@ -232,7 +232,7 @@ Begin now. Read only what you need to name exact paths, then write the full plan
 
 ```json
 {
-  "model": "grok-4.5-xhigh",
+  "model": "cursor-grok-4.5-high",
   "capability": "ask",
   "prompt": "<paste filled PLAN-WRITER BRIEF TEMPLATE here>"
 }
@@ -252,5 +252,5 @@ on `cursor_answer`, then continue until terminal status.
 ## Review after plan-writing
 
 Prefer a catalog **Design-critic** or **Verifier** on `gemini-3.5-flash` or
-`gpt-5.5-high` with `requireNonClaude: true` — never `grok-4.5-xhigh` reviewing
+`gpt-5.6-sol-high` with `requireNonClaude: true` — never `cursor-grok-4.5-high` reviewing
 its own plan.

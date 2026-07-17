@@ -241,7 +241,8 @@ Input schema = `RunInput` (section 3); only `prompt` is required. The `model` pr
 Behavior (delegates to `runDelegation` → registry `dispatch`):
 1. Resolve model from `{model, requireNonClaude}` against the curated map.
 2. Map `capability` (+`allowUnsandboxed`) to flags.
-3. If a write capability → **verify deny-list** (throws/fails closed if missing).
+3. If the capability is `forced` (all of them — every cap carries `--force`) → **verify deny-list**
+   (throws/fails closed if missing).
 4. Map `isolation` to `{flags, cwd}`.
 5. Compose the prompt (preamble + verify-scope + statusBlock + prompt, then strip NULs).
 6. Capture `HEAD` of `cwd` (for the change-set; for `BackendProvided`, capture from server cwd /
@@ -325,14 +326,22 @@ cursor-agent --print --output-format stream-json --trust --approve-mcps
 ### 5.2 capability → flags
 | capability | flags | notes |
 |---|---|---|
-| `ask` | `--mode ask` | read-only |
-| `plan` | `--mode plan` | read-only |
+| `ask` | `--mode ask --force` | read-only (no edits) but **runs shell** — e.g. `git show` for branch-only content |
+| `plan` | `--mode plan --force` | read-only (no edits) but **runs shell** |
 | `write` | `--sandbox enabled --force` | no `--mode`: the default mode-less `--print` agent has write+shell; `--mode` now only accepts read-only plan/ask |
 | `write-unsandboxed` *(with `allowUnsandboxed:true`)* | `--sandbox disabled --force` | |
 | `write-unsandboxed` *(without the flag)* | `--sandbox enabled --force` | **downgraded** to `write`; report `downgraded:true` |
 
-`--force` = "allow commands unless explicitly denied"; it is what makes write agents
-non-interactive, and is why the deny-list (section 7) must be present.
+`--force` = "allow commands unless explicitly denied". **Every** capability carries it:
+a headless (`--print`) run has no interactive approval channel, so without `--force` an
+`ask`/`plan` agent blocks forever the instant it tries to run a shell command (verified:
+`--mode plan` alone → timeout / 0 bytes; `--force --mode plan` / `--force --mode ask` →
+real `git show` output, exit 0). `--mode ask`/`plan` still bar edits even with `--force`,
+so read-only + `--force` = "run any read-only command unprompted". Because `--force` makes
+command execution non-interactive for read-only caps too, the deny-list (section 7) gates
+**all** capabilities, not just writes — `CapabilityResult.forced` (true for every cap)
+drives the gate, distinct from `isWrite` (which still drives the write-path lock and
+change-set finalize).
 
 ### 5.3 isolation → {flags, cwd}
 | isolation | flags | cwd |
@@ -480,12 +489,16 @@ prefix), races `completion`(s) vs a timeout vs abort, then returns poll snapshot
 ```
 
 ### 7.3 Fail-closed deny-list (`safety.ts`)
-Before any `write`/`write-unsandboxed` call: read `~/.cursor/cli-config.json`; if every pattern in
-`requiredDeny` is **not** present in `permissions.deny`, throw `DenyListError` and refuse to run.
-`requiredDeny: []` → always passes. Read-only (`ask`/`plan`) calls skip the check. Rationale:
-`--force` makes write agents non-interactive, so the only guard against a destructive command is
-the deny-list — verify it exists before trusting it. The host profile and the cli-config deny-list
-are **per-machine** and must not be copied between hosts (the example patterns target one GPU host).
+Before **any** delegation (`ask`/`plan`/`write`/`write-unsandboxed`): read
+`~/.cursor/cli-config.json`; if every pattern in `requiredDeny` is **not** present in
+`permissions.deny`, throw `DenyListError` and refuse to run. `requiredDeny: []` → always passes.
+The gate fires whenever `CapabilityResult.forced` is true, which is every capability. Rationale:
+`--force` makes command execution non-interactive for read-only caps too — a `--force --mode plan`
+agent can't edit files but can run any non-denied shell command (`curl`, `git push`, …) unprompted,
+so the deny-list is the only guard; verify it exists before trusting it. (Read-only caps used to
+skip this check when they lacked `--force` and thus couldn't run commands at all.) The host profile
+and the cli-config deny-list are **per-machine** and must not be copied between hosts (the example
+patterns target one GPU host).
 
 ### 7.4 Defaults shipped (`config/models.json`)
 ```jsonc

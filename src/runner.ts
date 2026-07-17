@@ -71,7 +71,10 @@ export async function runDelegation(
 
   const cap = mapCapability(capability, allowUnsandboxed);
 
-  if (cap.isWrite) {
+  // `--force` (every capability carries it) makes command execution non-interactive,
+  // so the deny-list is the only guard against a destructive shell command — verify it
+  // for read-only ask/plan too, not just write caps.
+  if (cap.forced) {
     verifyDenyList(config.profile.requiredDeny ?? [], deps.cliConfig);
   }
 

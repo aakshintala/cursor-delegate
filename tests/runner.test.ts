@@ -119,7 +119,7 @@ test("buildArgv adds --resume when a session is given", () => {
 
 test("an ask run builds a spec with the composed prompt + default gate", async () => {
   const { registry, last } = fakeRegistry();
-  await runDelegation({ prompt: "do it" }, depsWith(registry, []));
+  await runDelegation({ prompt: "do it" }, depsWith(registry, ["rm -rf /"]));
   const spec = last();
   assert.equal(spec.model, "composer-2.5");
   assert.equal(spec.isWrite, false);
@@ -145,6 +145,24 @@ test("a write with a missing deny pattern throws before dispatch", async () => {
   const { registry } = fakeRegistry();
   await assert.rejects(
     () => runDelegation({ prompt: "edit", capability: "write" }, depsWith(registry, [])),
+    DenyListError,
+  );
+});
+
+test("a read-only ask with a missing deny pattern throws before dispatch", async () => {
+  // ask/plan carry --force now, so they run shell non-interactively and must be
+  // gated on the deny-list exactly like write caps.
+  const { registry } = fakeRegistry();
+  await assert.rejects(
+    () => runDelegation({ prompt: "look", capability: "ask" }, depsWith(registry, [])),
+    DenyListError,
+  );
+});
+
+test("a read-only plan with a missing deny pattern throws before dispatch", async () => {
+  const { registry } = fakeRegistry();
+  await assert.rejects(
+    () => runDelegation({ prompt: "plan it", capability: "plan" }, depsWith(registry, [])),
     DenyListError,
   );
 });
@@ -224,7 +242,7 @@ test("per-call gate and verifyCommands override the profile defaults", async () 
   const { registry, last } = fakeRegistry();
   await runDelegation(
     { prompt: "p", gate: "custom-gate", verifyCommands: ["x test"] },
-    depsWith(registry, []),
+    depsWith(registry, ["rm -rf /"]),
   );
   const spec = last();
   assert.equal(spec.gate, "custom-gate");
@@ -244,7 +262,7 @@ test("JobSpec.resumeContext captures isolation, capability, verifyCommands, gate
       gate: "custom-gate",
       allowPartialCommit: true,
     },
-    depsWith(registry, []),
+    depsWith(registry, ["rm -rf /"]),
   );
   const spec = last();
   assert.deepEqual(spec.resumeContext, {
@@ -261,7 +279,7 @@ test("JobSpec.resumeContext captures isolation, capability, verifyCommands, gate
 
 test("JobSpec.resumeContext defaults capability ask and profile gate", async () => {
   const { registry, last } = fakeRegistry();
-  await runDelegation({ prompt: "do it" }, depsWith(registry, []));
+  await runDelegation({ prompt: "do it" }, depsWith(registry, ["rm -rf /"]));
   const ctx = last().resumeContext;
   assert.equal(ctx.model, "composer-2.5");
   assert.equal(ctx.capability, "ask");

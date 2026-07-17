@@ -14,9 +14,12 @@ for the current model-layer design. Highlights:
   `composer-2.5` when `model` is omitted.
 - **Uncorrelated review contract** — `requireNonClaude: true` **hard-rejects** if the resolved
   model's family is `claude` (no silent swap), so a reviewer never shares the producer's family.
-- **Capability modes** — `ask` / `plan` (read-only) vs `write` / `write-unsandboxed`.
-- **Fail-closed deny-list** — write calls are refused unless the host's cursor-agent deny-list
-  contains every required pattern.
+- **Capability modes** — `ask` / `plan` (read-only: no edits, but they run read-only shell such as
+  `git show` for branch-only content) vs `write` / `write-unsandboxed`. Every mode runs `--force`
+  so a headless agent never blocks on an approval prompt.
+- **Fail-closed deny-list** — **every** call (read-only included) is refused unless the host's
+  cursor-agent deny-list contains every required pattern. Because `--force` lets even `ask`/`plan`
+  run non-denied shell commands, the deny-list is their only guard.
 - **Async job model** — fast tasks return synchronously; slow tasks detach and hand back a `jobId`
   you `cursor_poll` / `cursor_wait` on. Live progress streams while a call blocks.
 - **Needs-input round-trip** — a delegate that ends with `STATUS: NEEDS_CONTEXT` is retained as a
@@ -41,8 +44,9 @@ resume flow), see the [`delegate` skill](./plugin/skills/delegate/SKILL.md).
 
 1. `cursor-agent` installed and logged in (`cursor-agent status`).
 2. A host profile at `~/.config/cursor-delegate/host-profile.json` (scaffolded by setup).
-3. For any **write** capability: the host deny-list merged into `~/.cursor/cli-config.json`
-   `permissions.deny`. These files are per-machine — do not copy them between hosts.
+3. For **any** capability (read-only `ask`/`plan` included, since they run `--force` shell): the
+   host deny-list merged into `~/.cursor/cli-config.json` `permissions.deny`. These files are
+   per-machine — do not copy them between hosts.
 
 ## Build & install
 
@@ -75,7 +79,7 @@ npm run build    # tsc -> dist/
 |---|---|
 | `config/models.json` (bundled) | model allow-list: `default` + per-id `{label, family, price}` (`$/MTok`) |
 | `~/.config/cursor-delegate/host-profile.json` | overrides + policy; may merge `default` / `models` and set `requiredDeny`, `gate`, deadlines (override path via `$CURSOR_DELEGATE_HOST_PROFILE`) |
-| `~/.cursor/cli-config.json` | Cursor's own `permissions.deny` — checked before writes |
+| `~/.cursor/cli-config.json` | Cursor's own `permissions.deny` — checked before every run (all caps carry `--force`) |
 
 See [`config/agents/catalog.md`](./config/agents/catalog.md) for the reusable "agent" convention
 tuples over `cursor_run`.

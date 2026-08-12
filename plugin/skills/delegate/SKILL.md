@@ -25,7 +25,7 @@ Delegate when the work is:
 
 - **Token-heavy plan authoring** after you (or the user) already have a spec —
   the driving use case: brainstorm/spec stays with you; detailed plan-writing goes
-  to `cursor-grok-4.5-high`.
+  to `cursor-grok-4.6-xhigh`.
 - **Mechanical or well-scoped coding** (codemod, single planned task, rebuild from
   a clear spec).
 - **Uncorrelated review** (refute a claim, critique a design, review a spec or
@@ -38,12 +38,15 @@ models would review with the same id that produced the artifact.
 
 ## Model picks
 
-Allow-list ids only (server rejects anything else):
+Allow-list ids only (server rejects anything else): `composer-2.5`,
+`cursor-grok-4.6-xhigh`, `cursor-grok-4.5-high`, `gemini-3.5-flash`,
+`gpt-5.6-sol-high`, `gpt-5.6-terra-high`. `cursor-grok-4.5-high` remains
+callable; it is not the plan-writer/coding pick.
 
 | Intent | `model` | `requireNonClaude` |
 |---|---|---|
 | Bulk / cheap / default | `composer-2.5` | `false` (omit) |
-| Plan-writing / strong coding | `cursor-grok-4.5-high` | `false` (omit) |
+| Plan-writing / strong coding | `cursor-grok-4.6-xhigh` | `false` (omit) |
 | Diverse review (uncorrelated) | `gemini-3.5-flash`, `gpt-5.6-sol-high`, or `gpt-5.6-terra-high` | `true` |
 
 Omit `model` only when `composer-2.5` is acceptable — that is the server default.
@@ -59,7 +62,7 @@ Minimum shape:
 ```json
 {
   "prompt": "<task for the Cursor agent>",
-  "model": "cursor-grok-4.5-high",
+  "model": "cursor-grok-4.6-xhigh",
   "capability": "ask"
 }
 ```
@@ -109,7 +112,7 @@ backstop — especially for delegated plans.
 2. Build the prompt from the **PLAN-WRITER BRIEF TEMPLATE** in
    [reference.md](./reference.md) — fill every placeholder; do not send an empty
    template.
-3. `cursor_run` with `model: "cursor-grok-4.5-high"`, `capability: "ask"` or `"plan"`
+3. `cursor_run` with `model: "cursor-grok-4.6-xhigh"`, `capability: "ask"` or `"plan"`
    (read-only plan authoring; use `write` only if the plan must be written into the
    repo by the delegate).
 4. On `NEEDS_CONTEXT`, answer via `cursor_answer` and continue until `DONE` /

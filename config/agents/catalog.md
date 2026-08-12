@@ -13,7 +13,7 @@ second opinion stays uncorrelated.
 | **Triager** | `composer-2.5` | `false` | `ask` | None | classify / route / summarize an issue |
 | **Design-critic** | `gemini-3.5-flash` | `true` | `plan` | None | critique a design, surface risks, propose alternatives |
 | **Codemod** | `composer-2.5` | `false` | `write` | CallerProvided | mechanical, well-scoped edit across a tree |
-| **Re-implementer** | `cursor-grok-4.5-high` | `false` | `write` | CallerProvided | rebuild a component from a spec |
+| **Re-implementer** | `cursor-grok-4.6-xhigh` | `false` | `write` | CallerProvided | rebuild a component from a spec |
 | **SP-implementer** | `composer-2.5` | `false` | `write` | CallerProvided | implement a single planned task |
 | **SP spec-reviewer** | `gemini-3.5-flash` | `true` | `ask` | None | review a spec for gaps (different model than implementer) |
 | **SP quality-reviewer** | `gpt-5.6-terra-high` | `true` | `ask` | None | review an implementation for quality (different model than implementer) |
@@ -25,8 +25,9 @@ Notes:
   postcondition the tool itself checks.
 - Reviewers (Verifier, Design-critic, SP spec-reviewer, SP quality-reviewer) use a **different**
   allow-list model from the producer and pass `requireNonClaude: true`.
-- Plan-writing (not a named row above) uses `cursor-grok-4.5-high` with `capability` `ask` or `plan`;
+- Plan-writing (not a named row above) uses `cursor-grok-4.6-xhigh` with `capability` `ask` or `plan`;
   see `plugin/skills/delegate/SKILL.md` and the PLAN-WRITER BRIEF TEMPLATE in
   `plugin/skills/delegate/reference.md`.
-- Allow-list ids only: `composer-2.5`, `cursor-grok-4.5-high`, `gemini-3.5-flash`, `gpt-5.6-sol-high`, `gpt-5.6-terra-high`.
+- Allow-list ids only: `composer-2.5`, `cursor-grok-4.6-xhigh`, `cursor-grok-4.5-high`, `gemini-3.5-flash`, `gpt-5.6-sol-high`, `gpt-5.6-terra-high`.
+  `cursor-grok-4.5-high` remains valid; it is not the plan-writer/coding pick.
   Omit `model` only when the default `composer-2.5` is intended.

@@ -1,6 +1,6 @@
 {
   "name": "cursor-delegate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP stdio server that delegates coding/research tasks to Cursor's models via the local cursor-agent CLI.",
   "type": "module",
   "bin": {

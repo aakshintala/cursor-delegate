@@ -28,6 +28,6 @@ Notes:
 - Plan-writing (not a named row above) uses `cursor-grok-4.6-xhigh` with `capability` `ask` or `plan`;
   see `plugin/skills/delegate/SKILL.md` and the PLAN-WRITER BRIEF TEMPLATE in
   `plugin/skills/delegate/reference.md`.
-- Allow-list ids only: `composer-2.5`, `cursor-grok-4.6-xhigh`, `cursor-grok-4.5-high`, `gemini-3.5-flash`, `gpt-5.6-sol-high`, `gpt-5.6-terra-high`.
-  `cursor-grok-4.5-high` remains valid; it is not the plan-writer/coding pick.
+- Allow-list ids only: `composer-2.5`, `cursor-grok-4.6-xhigh`, `cursor-grok-4.6-high`, `cursor-grok-4.5-high`, `gemini-3.5-flash`, `gpt-5.6-sol-high`, `gpt-5.6-terra-high`.
+  `cursor-grok-4.6-high` and `cursor-grok-4.5-high` remain valid; they are not the plan-writer/coding pick.
   Omit `model` only when the default `composer-2.5` is intended.

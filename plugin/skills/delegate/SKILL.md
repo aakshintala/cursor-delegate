@@ -39,9 +39,10 @@ models would review with the same id that produced the artifact.
 ## Model picks
 
 Allow-list ids only (server rejects anything else): `composer-2.5`,
-`cursor-grok-4.6-xhigh`, `cursor-grok-4.5-high`, `gemini-3.5-flash`,
-`gpt-5.6-sol-high`, `gpt-5.6-terra-high`. `cursor-grok-4.5-high` remains
-callable; it is not the plan-writer/coding pick.
+`cursor-grok-4.6-xhigh`, `cursor-grok-4.6-high`, `cursor-grok-4.5-high`,
+`gemini-3.5-flash`, `gpt-5.6-sol-high`, `gpt-5.6-terra-high`.
+`cursor-grok-4.6-high` and `cursor-grok-4.5-high` remain callable; they
+are not the plan-writer/coding pick.
 
 | Intent | `model` | `requireNonClaude` |
 |---|---|---|

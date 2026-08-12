@@ -173,7 +173,7 @@ Start the plan with this header shape (fill Goal / Architecture / Tech Stack):
 ## Global Constraints
 
 - Scope only design-spec §8 (skill + catalog). Model layer, needs-input, and doctor are already implemented — document them, do not build them.
-- Allow-list ids: composer-2.5, cursor-grok-4.6-xhigh, cursor-grok-4.5-high, gemini-3.5-flash, gpt-5.6-sol-high, gpt-5.6-terra-high.
+- Allow-list ids: composer-2.5, cursor-grok-4.6-xhigh, cursor-grok-4.6-high, cursor-grok-4.5-high, gemini-3.5-flash, gpt-5.6-sol-high, gpt-5.6-terra-high.
 - Model picks: composer-2.5 bulk; cursor-grok-4.6-xhigh plan-writing/coding; gemini-3.5-flash / gpt-5.6-sol-high / gpt-5.6-terra-high diverse review with requireNonClaude: true.
 - Catalog: map roles to model + requireNonClaude columns; keep governing principle.
 - No unit tests; use verification steps. Commit after each task.

@@ -75,7 +75,20 @@ Common additions:
 - `verifyCommands`: string[] — only verify commands the agent may run
 - `gate`: postcondition **you** (the tool) enforce after the agent
 - `requireNonClaude`: `true` for reviewer roles
-- `background`: `true` to fan out; then `cursor_wait` / `cursor_wait_any` / `cursor_wait_all`
+- `background`: `true` to fan out; then wait for completion (see below)
+
+### Waiting on jobs
+
+**Short jobs (expected well under a minute):** after `background: true`, block with
+`cursor_wait` (one job), `cursor_wait_any` (first done), or `cursor_wait_all` (every job).
+Blocking a short turn is cheap and simpler than the file-watch pattern.
+
+**Long jobs:** use the **non-blocking wait pattern** in
+[reference.md — Waiting on jobs](./reference.md#waiting-on-jobs): dispatch with
+`background: true`, launch a bounded background shell that watches the per-job status record
+on disk, and continue this turn. You get one notification when the job (or batch) reaches a
+terminal state. Same `NEEDS_CONTEXT` → `cursor_answer` resume flow applies when the printed
+record shows `NEEDS_CONTEXT`.
 
 Always end delegated prompts with an instruction to finish with a trailing
 `STATUS: DONE` | `BLOCKED` | `NEEDS_CONTEXT` line (the server also injects a

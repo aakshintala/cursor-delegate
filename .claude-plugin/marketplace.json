@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cursor-delegate-local",
+  "version": "0.2.0",
+  "description": "Local directory marketplace shipping the cursor-delegate MCP server and its orchestration skill.",
+  "owner": { "name": "Amogh Akshintala", "email": "amogh.akshintala@databricks.com" },
+  "plugins": [
+    {
+      "name": "cursor-delegate",
+      "description": "MCP stdio server that delegates coding/research tasks to Cursor's models via the local cursor-agent CLI.",
+      "source": ".",
+      "category": "workflow",
+      "version": "0.2.0"
+    }
+  ]
+}

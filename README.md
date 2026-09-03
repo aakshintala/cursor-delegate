@@ -38,7 +38,7 @@ for the current model-layer design. Highlights:
 `cursor_answer`, `doctor`.
 
 For orchestration guidance (when to delegate, model picks, the plan-writer brief, the needs-input
-resume flow), see the [`delegate` skill](./plugin/skills/delegate/SKILL.md).
+resume flow), see the [`delegate` skill](./skills/delegate/SKILL.md).
 
 ## Prerequisites (per machine)
 
@@ -51,7 +51,7 @@ resume flow), see the [`delegate` skill](./plugin/skills/delegate/SKILL.md).
 ## Build & install
 
 ```bash
-./bin/setup.sh          # build + scaffold profile + register at user scope
+./bin/setup.sh          # build + scaffold profile + install plugin at user scope
 DRY_RUN=1 ./bin/setup.sh # preview without changes
 ```
 
@@ -59,11 +59,9 @@ Or manually:
 
 ```bash
 npm install && npm run build
-claude mcp add cursor-delegate -s user -- "$(command -v node)" "$PWD/dist/index.js"
+claude plugin marketplace add ./ --scope user
+claude plugin install cursor-delegate@cursor-delegate-local --scope user
 ```
-
-As a Claude Code plugin, point your plugin config at `plugin/plugin.json` (which references
-`plugin/.mcp.json`).
 
 ## Develop
 

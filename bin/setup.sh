@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# cursor-delegate setup: build the server and register it with Claude Code at user scope.
+# cursor-delegate setup: build the server and install the plugin with Claude Code at user scope.
 # Portable across Linux/macOS. Pure JS build (tsc), no native deps.
 #
 #   DRY_RUN=1 ./bin/setup.sh   # preview without making changes
 set -euo pipefail
 
 NAME="cursor-delegate"
+MARKETPLACE="cursor-delegate-local"
+PLUGIN="${NAME}@${MARKETPLACE}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DIST="$REPO_ROOT/dist/index.js"
 DRY_RUN="${DRY_RUN:-0}"
 
 run() {
@@ -58,14 +59,15 @@ else
   echo "Host profile already exists at $PROFILE (leaving untouched)."
 fi
 
-# 5. Register at user scope (idempotent: remove-then-add).
+# 5. Install plugin at user scope (idempotent: marketplace add + plugin install).
 if command -v claude >/dev/null 2>&1; then
-  run "claude mcp remove '$NAME' -s user >/dev/null 2>&1 || true"
-  run "claude mcp add '$NAME' -s user -- '$NODE_BIN' '$DIST'"
-  echo "Registered '$NAME' with Claude Code (user scope)."
+  run "claude plugin marketplace add '$REPO_ROOT' --scope user"
+  run "claude plugin install '$PLUGIN' --scope user"
+  echo "Installed '$PLUGIN' with Claude Code (user scope)."
 else
-  echo "NOTE: 'claude' CLI not found. Register manually:"
-  echo "  claude mcp add $NAME -s user -- $NODE_BIN $DIST"
+  echo "NOTE: 'claude' CLI not found. Install manually from $REPO_ROOT:"
+  echo "  claude plugin marketplace add ./ --scope user"
+  echo "  claude plugin install $PLUGIN --scope user"
 fi
 
 echo "Done."

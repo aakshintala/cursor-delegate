@@ -254,3 +254,138 @@ on `cursor_answer`, then continue until terminal status.
 Prefer a catalog **Design-critic** or **Verifier** on `gemini-3.5-flash` or
 `gpt-5.6-sol-high` with `requireNonClaude: true` — never `cursor-grok-4.6-xhigh` reviewing
 its own plan.
+
+## Waiting on jobs
+
+Model picks and delegation policy live in [`SKILL.md`](./SKILL.md); this section covers only
+how to wait for `background: true` dispatches to finish.
+
+### Blocking wait tools (short jobs)
+
+For jobs expected to finish **well under a minute**, block the current turn with the MCP wait
+tools — simpler than the file-watch pattern below:
+
+| Tool | Use when |
+|------|----------|
+| `cursor_wait` | One job; block until it is terminal (or timeout). |
+| `cursor_wait_any` | Several jobs; block until the **first** reaches a terminal state. |
+| `cursor_wait_all` | Several jobs; block until **all** are terminal. |
+
+Each accepts optional `timeoutMs` (default 120000, clamp `[1000, 600000]`). On timeout they
+return the current `RUNNING` snapshot rather than hanging forever.
+
+If the returned status is `NEEDS_CONTEXT`, the `result` carries `jobId` and the delegate's
+question in `result.text`. Answer via `cursor_answer` (see [Needs-input resume flow](./SKILL.md#needs-input-resume-flow) in `SKILL.md`) and continue until a fully terminal status.
+
+### Non-blocking wait pattern (long jobs)
+
+For jobs expected to run **longer than about a minute**, do not hold the orchestrating turn
+inside `cursor_wait*`. Instead, watch the **status record** the server writes to disk and
+run the poll loop in a **background shell** so this turn can end and you are notified once
+when the job (or batch) is done.
+
+#### Status record — location and shape
+
+Every dispatched job gets one JSON file:
+
+```
+join(os.tmpdir(), "cursor-delegate-jobs", `${jobId}.json`)
+```
+
+On macOS `os.tmpdir()` is usually `$TMPDIR` (under `/var/folders/.../T/`); on Linux it is
+often `/tmp`. Resolve at runtime with `echo "${TMPDIR:-/tmp}/cursor-delegate-jobs/${JOB_ID}.json"` or `node -e "console.log(require('node:path').join(require('node:os').tmpdir(), 'cursor-delegate-jobs', process.argv[1] + '.json'))" "$JOB_ID"`.
+
+The file contains exactly what `cursor_poll` would return at that moment:
+
+- While running: `{ "status": "RUNNING", "progress": { ... } }`
+- When done: `{ "status": "<terminal>", "result": <RunOutput> }` — full terminal payload,
+  not just a status label.
+
+The server writes at job start and again at the terminal transition only (not on every
+progress tick).
+
+#### Host dependency: `jq`
+
+The examples below use `jq` to test `.status`. It is the one new host dependency this
+pattern assumes. Check before running verbatim:
+
+```bash
+command -v jq >/dev/null || { echo "jq is required for the status-record wait pattern" >&2; exit 1; }
+```
+
+#### Single-job pattern
+
+After `cursor_run` with `background: true`, note the returned `jobId`, set `STATUS_FILE` to
+its record path, then launch a **bounded** background wait (missing or never-written files
+must not hang forever — the outer `timeout` enforces that):
+
+```bash
+JOB_ID="<from cursor_run>"
+STATUS_FILE="${TMPDIR:-/tmp}/cursor-delegate-jobs/${JOB_ID}.json"
+
+command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
+
+timeout 300 bash -c 'until jq -e ".status != \"RUNNING\"" "$1" >/dev/null 2>&1; do sleep 2; done; cat "$1"' _ "$STATUS_FILE"
+```
+
+In Claude Code, invoke that shell with the **Bash** tool and `run_in_background: true` so
+this turn is not blocked for the full job duration. When the background command completes,
+read its stdout — that is the terminal `PollResult` JSON.
+
+#### Batch variant
+
+Same pattern over **N** job ids: the `until` loop requires **every** record to be non-`RUNNING`
+before exiting, then prints all terminal records (one notification for the whole batch):
+
+```bash
+JOB_IDS=( "<id-a>" "<id-b>" )   # one entry per background cursor_run
+FILES=()
+for id in "${JOB_IDS[@]}"; do
+  FILES+=( "${TMPDIR:-/tmp}/cursor-delegate-jobs/${id}.json" )
+done
+
+command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
+
+timeout 300 bash -c '
+  FILES=("$@")
+  until
+    all=true
+    for f in "${FILES[@]}"; do
+      if ! jq -e ".status != \"RUNNING\"" "$f" >/dev/null 2>&1; then
+        all=false
+        break
+      fi
+    done
+    $all
+  do
+    sleep 2
+  done
+  for f in "${FILES[@]}"; do
+    echo "=== $f ==="
+    cat "$f"
+    echo
+  done
+' _ "${FILES[@]}"
+```
+
+Launch with Bash `run_in_background: true` as above.
+
+#### `NEEDS_CONTEXT` is terminal for this wait
+
+When the delegate parks for input, the status record leaves `RUNNING` with
+`status: "NEEDS_CONTEXT"` and the full `result` (including `jobId` and the question in
+`result.text`). The background wait **exits and prints that record** — the job itself is not
+finished, but **this wait is**. Inspect the printed JSON; if `status` is `NEEDS_CONTEXT`,
+follow up with `cursor_answer` exactly as for blocking `cursor_wait` (see
+[Needs-input resume flow](./SKILL.md#needs-input-resume-flow) in `SKILL.md`), then wait again
+if the answer resumes a still-running job.
+
+#### When to use which
+
+| Expected duration | Approach |
+|-------------------|----------|
+| Well under a minute | `cursor_wait` / `cursor_wait_any` / `cursor_wait_all` (blocking) |
+| Longer runs | Status-record background shell (non-blocking) |
+
+Blocking tools remain correct and preferred for short work; the file-watch pattern exists so
+the orchestrating turn is not tied up for the entire delegate runtime.

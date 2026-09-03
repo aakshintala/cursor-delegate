@@ -35,3 +35,21 @@ test("outputTail is capped at the last 2048 bytes", async () => {
   assert.ok(Buffer.byteLength(r.outputTail, "utf8") <= 2048);
   assert.match(r.outputTail, /2000/);
 });
+
+test("a hung gate is killed by timeoutMs and reported as failed, not hanging", async () => {
+  const start = Date.now();
+  const r = await runGate("sleep 30", process.cwd(), { timeoutMs: 200 });
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 5000, `gate returned in ${elapsed}ms`);
+  assert.equal(r.passed, false);
+  assert.match(r.error ?? "", /timeout or abort/);
+});
+
+test("an aborted signal kills the gate promptly", async () => {
+  const ac = new AbortController();
+  const p = runGate("sleep 30", process.cwd(), { signal: ac.signal });
+  setTimeout(() => ac.abort(), 50);
+  const r = await p;
+  assert.equal(r.passed, false);
+  assert.match(r.error ?? "", /timeout or abort/);
+});

@@ -63,6 +63,8 @@ export interface GateResult {
   exitCode: number;
   passed: boolean;
   outputTail: string;
+  /** Set when the gate was killed by its timeout or an abort signal. */
+  error?: string;
 }
 
 export interface RunOutput {
@@ -287,7 +289,13 @@ export interface FinalizeCtx {
   priceMap: PriceMap;
   jobId?: string;
   downgraded?: boolean;
-  runGate?: (command: string, cwd: string) => Promise<GateResult>;
+  runGate?: (
+    command: string,
+    cwd: string,
+    opts?: { signal?: AbortSignal },
+  ) => Promise<GateResult>;
+  /** Abort signal for bounded finalize: cancel/shutdown escalates into a hung gate. */
+  signal?: AbortSignal;
   gitDelta?: (cwd: string, headBefore: string | null) => Promise<ChangeSet | null>;
   /** When set, change-set and gate run in the resolved worktree under `cwd`. */
   worktreeName?: string;

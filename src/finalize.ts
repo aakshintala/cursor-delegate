@@ -76,10 +76,12 @@ export async function finalizeRun(
 
   const opsCwd = await resolveOpsCwd(ctx);
 
-  // #7 gate (tool-enforced postcondition).
+  // #7 gate (tool-enforced postcondition). Bounded: ctx.signal aborts a hung gate.
   if (ctx.gate) {
     const runGate = ctx.runGate ?? defaultRunGate;
-    const gateResult = await runGate(ctx.gate, opsCwd ?? ctx.cwd);
+    const gateResult = await runGate(ctx.gate, opsCwd ?? ctx.cwd, {
+      signal: ctx.signal,
+    });
     out.gateResult = gateResult;
     if (!gateResult.passed && out.status === "DONE") {
       out.status = "DONE_WITH_CONCERNS";

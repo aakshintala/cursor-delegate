@@ -46,6 +46,10 @@ const realClock: Clock = {
 interface Job {
   id: string;
   status: JobStatus;
+  /** Internal lifecycle stage (#1): bounded finalize; terminal on retire. */
+  stage: "running" | "finalizing" | "terminal";
+  /** Aborted by cancel/shutdown to escalate into a hung gate during finalizing. */
+  finalizeAbort: AbortController | null;
   spec: JobSpec;
   child: ChildProcess | null;
   startedAt: number;
@@ -164,6 +168,8 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       job.heartbeatTimer = null;
     }
     job.status = job.terminationReason ?? out.status;
+    job.stage = "terminal";
+    job.finalizeAbort = null;
     job.terminalOutput = out;
     job.child = null;
     active.delete(job.id);
@@ -199,6 +205,8 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     const job: Job = {
       id: jobId,
       status: "RUNNING",
+      stage: "running",
+      finalizeAbort: null,
       spec,
       child: handle.child,
       startedAt: clock.now(),
@@ -296,6 +304,12 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     const finalizeJob = async (res: BackendResult): Promise<RunOutput> => {
       clearIdle();
 
+      // Finalizing stage (#1): a hung gate can no longer pin the job forever —
+      // the gate itself is time-bounded, and cancel/killAll abort it outright.
+      job.stage = "finalizing";
+      const finalizeAbort = new AbortController();
+      job.finalizeAbort = finalizeAbort;
+
       const ctx: FinalizeCtx = {
         cwd: spec.cwd,
         headBefore: spec.headBefore,
@@ -308,6 +322,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
         jobId: job.id,
         downgraded: spec.downgraded,
         worktreeName: spec.worktreeName,
+        signal: finalizeAbort.signal,
       };
 
       // Cancel/stall (#9): no gate (meaningless against a killed-mid-flight run) and no
@@ -452,6 +467,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     const job = active.get(jobId);
     if (!job) return poll(jobId);
     job.terminationReason = "CANCELLED";
+    job.finalizeAbort?.abort();
     job.child?.kill("SIGTERM");
     await job.completion.catch(() => {});
     return poll(jobId);
@@ -595,6 +611,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
 
   function killAll(): void {
     for (const job of active.values()) {
+      job.finalizeAbort?.abort();
       job.child?.kill("SIGTERM");
     }
   }

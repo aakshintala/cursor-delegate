@@ -758,3 +758,39 @@ test("lookupAnswer rejects NEEDS_CONTEXT jobs that lack a sessionId", async () =
     status: "NEEDS_CONTEXT",
   });
 });
+
+test("cancel during finalizing aborts the finalize stage instead of waiting forever", async () => {
+  // Finalize hangs until ctx.signal aborts — models runGate's abort support.
+  let signalSeen: AbortSignal | null = null;
+  const hangingFinalize: RegistryDeps["finalize"] = async (res, ctx) => {
+    signalSeen = ctx.signal ?? null;
+    return new Promise((resolve) => {
+      ctx.signal?.addEventListener("abort", () => {
+        resolve({
+          status: "ERROR",
+          text: "finalize aborted",
+          sessionId: null,
+          backend: ctx.backend,
+          model: ctx.model,
+          usage: null,
+          costUsd: null,
+          costEstimated: true,
+          durationMs: null,
+          jobId: ctx.jobId,
+        });
+      });
+    });
+  };
+  const { registry, handles } = setup({ finalize: hangingFinalize });
+  const result = await registry.dispatch(specOf({ background: true }));
+  assert.equal(result.status, "RUNNING");
+  handles[0].finish(doneOk);
+  // Wait until finalize has actually begun (signal captured).
+  await new Promise<void>((res) => {
+    const t = setInterval(() => {
+      if (signalSeen !== null) { clearInterval(t); res(); }
+    }, 5);
+  });
+  await registry.cancel(result.jobId);
+  assert.equal(registry.poll(result.jobId).status, "CANCELLED");
+});

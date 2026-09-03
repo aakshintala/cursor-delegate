@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer, handleCall, type ServerDeps } from "../src/index.js";
 import { buildTools } from "../src/tool-schemas.js";
 import type { JobRegistry } from "../src/job-registry.js";
@@ -231,4 +233,43 @@ test("cursor_answer rejects a job that is not awaiting an answer", async () => {
     /job is not awaiting an answer/,
   );
   assert.deepEqual(calls, ["lookupAnswer:j-done"]);
+});
+
+test("transport smoke: ListTools + CallTool over a linked in-memory transport", async () => {
+  const { deps: d } = deps();
+  const server = createServer(d);
+  const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "smoke", version: "0" }, { capabilities: {} });
+  await Promise.all([server.connect(serverT), client.connect(clientT)]);
+  try {
+    const listed = await client.listTools();
+    assert.equal(listed.tools.length, 8);
+    assert.ok(listed.tools.some((t) => t.name === "cursor_run"));
+
+    const poll = (await client.callTool({
+      name: "cursor_poll",
+      arguments: { jobId: "missing" },
+    })) as { content: Array<{ type: string; text: string }> };
+    assert.equal(poll.content[0].type, "text");
+    assert.deepEqual(JSON.parse(poll.content[0].text), { status: "NOT_FOUND" });
+
+    await assert.rejects(
+      () => client.callTool({ name: "nope", arguments: {} }),
+      /unknown tool/,
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("wait* tools reject non-finite timeoutMs", async () => {
+  const { deps: d } = deps();
+  for (const name of ["cursor_wait", "cursor_wait_any", "cursor_wait_all"]) {
+    const args =
+      name === "cursor_wait"
+        ? { jobId: "j", timeoutMs: Number.NaN }
+        : { jobIds: ["j"], timeoutMs: "5000" };
+    await assert.rejects(() => handleCall(name, args, d), /timeoutMs/);
+  }
 });

@@ -59,6 +59,16 @@ function asStringArray(v: unknown): string[] {
   return v.filter((x): x is string => typeof x === "string");
 }
 
+/** Optional per-call wait timeout: absent → registry default; present must be a finite number. */
+function optTimeoutMs(args: Record<string, unknown> | undefined): number | undefined {
+  const v = args?.timeoutMs;
+  if (v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v)) {
+    throw new Error(`invalid timeoutMs: must be a finite number`);
+  }
+  return v;
+}
+
 /** Route a tool call to the right handler. Exported for the index smoke test. */
 export async function handleCall(
   name: string,
@@ -78,23 +88,20 @@ export async function handleCall(
     case "cursor_cancel":
       return deps.registry.cancel(requireString(args, "jobId"));
     case "cursor_wait":
-      return deps.registry.wait(
-        requireString(args, "jobId"),
-        typeof args?.timeoutMs === "number" ? args.timeoutMs : undefined,
-        { sink, signal },
-      );
+      return deps.registry.wait(requireString(args, "jobId"), optTimeoutMs(args), {
+        sink,
+        signal,
+      });
     case "cursor_wait_any":
-      return deps.registry.waitAny(
-        asStringArray(args?.jobIds),
-        typeof args?.timeoutMs === "number" ? args.timeoutMs : undefined,
-        { sink, signal },
-      );
+      return deps.registry.waitAny(asStringArray(args?.jobIds), optTimeoutMs(args), {
+        sink,
+        signal,
+      });
     case "cursor_wait_all":
-      return deps.registry.waitAll(
-        asStringArray(args?.jobIds),
-        typeof args?.timeoutMs === "number" ? args.timeoutMs : undefined,
-        { sink, signal },
-      );
+      return deps.registry.waitAll(asStringArray(args?.jobIds), optTimeoutMs(args), {
+        sink,
+        signal,
+      });
     case "cursor_answer":
       return answerDelegation(
         requireString(args, "jobId"),

@@ -137,6 +137,8 @@ export async function runDelegation(
     gate,
     allowPartialCommit,
     waitMs: input.waitMs,
+    idleMs: input.idleMs,
+    toolIdleMs: input.toolIdleMs,
     background: input.background,
     priceMap: config.priceMap,
     downgraded: cap.downgraded,
@@ -164,7 +166,7 @@ export async function answerDelegation(
   }
 
   const ctx = looked.resumeContext;
-  return runDelegation(
+  const result = await runDelegation(
     {
       prompt: answer,
       session: looked.sessionId,
@@ -182,4 +184,10 @@ export async function answerDelegation(
     deps,
     opts,
   );
+  // The old record stays NEEDS_CONTEXT forever — point watchers at the run that
+  // actually continues the work. Only when the resume detached to a new jobId.
+  if (result.status === "RUNNING") {
+    deps.registry.markSuperseded(jobId, result.jobId);
+  }
+  return result;
 }

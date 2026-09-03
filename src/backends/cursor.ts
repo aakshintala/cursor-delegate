@@ -48,6 +48,7 @@ export function makeCursorAdapter(deps?: { spawnFn?: SpawnFn }): Backend {
       };
 
       child.stdout?.on("data", (chunk: Buffer) => {
+        events.emit("activity");
         stdoutBuf += chunk.toString();
         let idx: number;
         while ((idx = stdoutBuf.indexOf("\n")) !== -1) {

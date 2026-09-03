@@ -1,4 +1,4 @@
-import type { FinalizeCtx, PriceMap, RunOutput } from "./types.js";
+import type { ChangeSet, FinalizeCtx, PriceMap, RunOutput } from "./types.js";
 import type { BackendResult } from "./backends/types.js";
 import { toRunOutput } from "./output.js";
 import { computeCost } from "./pricing.js";
@@ -13,6 +13,17 @@ async function resolveOpsCwd(ctx: FinalizeCtx): Promise<string | null> {
   if (ctx.worktreeName === undefined) return ctx.cwd;
   const resolve = ctx.resolveWorktreePath ?? defaultResolveWorktreePath;
   return resolve(ctx.cwd, ctx.worktreeName);
+}
+
+/** #6 tool-computed git change-set (ground truth) — shared by the full finalize path and finalizeStall. */
+async function computeChangeSet(
+  ctx: FinalizeCtx,
+): Promise<{ opsCwd: string | null; changeSet: ChangeSet | undefined }> {
+  const opsCwd = await resolveOpsCwd(ctx);
+  if (opsCwd === null) return { opsCwd, changeSet: undefined };
+  const gitDelta = ctx.gitDelta ?? defaultGitDelta;
+  const changeSet = await gitDelta(opsCwd, ctx.headBefore);
+  return { opsCwd, changeSet: changeSet ?? undefined };
 }
 
 /**
@@ -99,5 +110,34 @@ export async function finalizeRun(
   }
 
   if (concerns.length > 0) out.concerns = concerns;
+  return out;
+}
+
+/**
+ * Terminal RunOutput for a CANCELLED/STALLED job (#9). Deliberately narrower than
+ * `finalizeRun`: no gate (meaningless against a run that was killed mid-flight, and
+ * potentially expensive) and no incomplete-commit concern (that check assumes a run that
+ * finished on its own terms). It still computes the #6 change-set — whatever the agent
+ * already wrote to disk before the kill is exactly what a caller needs to decide whether to
+ * keep, discard, or redispatch, and skipping it left every terminated job with `text: ""`
+ * and no idea what (if anything) happened.
+ */
+export async function finalizeStall(
+  res: BackendResult,
+  ctx: FinalizeCtx,
+): Promise<RunOutput> {
+  const out = baseOutput(res, {
+    model: ctx.model,
+    backend: ctx.backend,
+    priceMap: ctx.priceMap,
+    jobId: ctx.jobId,
+    downgraded: ctx.downgraded,
+  });
+
+  if (res.stderr) out.stderrTail = tail(res.stderr, 2048);
+
+  const { changeSet } = await computeChangeSet(ctx);
+  if (changeSet) out.changeSet = changeSet;
+
   return out;
 }

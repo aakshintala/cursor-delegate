@@ -1,6 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { makeJobRegistry, type RegistryDeps } from "../src/job-registry.js";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  fileStatusRecordWriter,
+  makeJobRegistry,
+  type RegistryDeps,
+  type StatusRecordWriter,
+} from "../src/job-registry.js";
 import type { BackendResult } from "../src/backends/types.js";
 import type { DispatchResult, RunOutput } from "../src/types.js";
 import {
@@ -19,6 +28,8 @@ const doneOk: BackendResult = {
   stderr: "",
 };
 
+const noopStatusWriter: StatusRecordWriter = { write: () => {} };
+
 function setup(over: Partial<RegistryDeps> = {}) {
   const { backend, handles } = makeFakeBackend();
   const clock = new FakeClock();
@@ -26,16 +37,127 @@ function setup(over: Partial<RegistryDeps> = {}) {
     backend,
     deadlineMs: 1000,
     idleMs: null,
+    toolIdleMs: null,
     clock,
     finalize: FINALIZE,
+    finalizeStall: FINALIZE,
+    statusWriter: noopStatusWriter,
     ...over,
   });
   return { registry, handles, clock };
 }
 
+function statusSpy(): {
+  writer: StatusRecordWriter;
+  writes: Array<{ jobId: string; record: unknown }>;
+} {
+  const writes: Array<{ jobId: string; record: unknown }> = [];
+  return {
+    writes,
+    writer: {
+      write(jobId, record) {
+        writes.push({ jobId, record });
+      },
+    },
+  };
+}
+
+test("heartbeat refreshes the RUNNING record every 30s and stops at retirement", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry, handles, clock } = setup({ statusWriter: writer });
+  await registry.dispatch(specOf({ background: true }));
+  assert.equal(writes.length, 1);
+
+  await clock.advance(30_000);
+  await flush();
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].record.status, "RUNNING");
+  if (writes[1].record.status === "RUNNING") {
+    assert.equal(writes[1].record.lastHeartbeatAt, 30_000);
+  }
+
+  // Re-arms while RUNNING...
+  await clock.advance(30_000);
+  await flush();
+  assert.equal(writes.length, 3);
+
+  // ...and stops once terminal.
+  handles[0].finish(doneOk);
+  await flush();
+  const afterTerminal = writes.length;
+  assert.equal(writes[afterTerminal - 1].record.status, "DONE");
+  await clock.advance(120_000);
+  await flush();
+  assert.equal(writes.length, afterTerminal);
+});
+
+test("markSuperseded writes a forwarding pointer into the old record", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry, handles } = setup({ statusWriter: writer });
+  const r = await registry.dispatch(specOf({ background: true }));
+  const oldId = jobId(r);
+  handles[0].finish({
+    ...doneOk,
+    raw: { result: "what port?\nSTATUS: NEEDS_CONTEXT", is_error: false },
+    cleanExit: true,
+  });
+  await flush();
+  assert.equal(registry.poll(oldId).status, "NEEDS_CONTEXT");
+
+  const newId = randomUUID();
+  const res = registry.markSuperseded(oldId, newId);
+  assert.equal(res.status, "NEEDS_CONTEXT");
+  if (res.status !== "RUNNING" && res.status !== "NOT_FOUND") {
+    assert.equal(res.supersededBy, newId);
+  }
+  const last = writes[writes.length - 1];
+  assert.equal(last.jobId, oldId);
+  if (last.record.status !== "RUNNING" && last.record.status !== "NOT_FOUND") {
+    assert.equal(last.record.supersededBy, newId);
+  }
+});
+
+test("markSuperseded on an unknown job returns NOT_FOUND", () => {
+  const { registry } = setup();
+  assert.deepEqual(registry.markSuperseded(randomUUID(), randomUUID()), {
+    status: "NOT_FOUND",
+  });
+});
+
 function jobId(r: DispatchResult): string {
   return (r as { jobId: string }).jobId;
 }
+
+test("status persistence writes RUNNING at dispatch and terminal at completion", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry, handles } = setup({ statusWriter: writer });
+  const p = registry.dispatch(specOf());
+  assert.equal(writes.length, 1);
+  const id = writes[0].jobId;
+  assert.deepEqual(writes[0].record, {
+    status: "RUNNING",
+    lastHeartbeatAt: 0,
+    progress: {
+      lastTool: null,
+      tokensSoFar: 0,
+      elapsedMs: 0,
+      lastAssistant: null,
+      filesTouchedSoFar: [],
+      phase: null,
+    },
+  });
+
+  handles[0].finish(doneOk);
+  await flush();
+  const res = (await p) as RunOutput;
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes[1].record, registry.poll(id));
+  assert.equal(writes[1].record.status, "DONE");
+  if (writes[1].record.status !== "RUNNING" && writes[1].record.status !== "NOT_FOUND") {
+    assert.equal(writes[1].record.result.status, "DONE");
+    assert.equal(writes[1].record.result.text, res.text);
+  }
+});
 
 test("a task finishing within the deadline returns a RunOutput", async () => {
   const { registry, handles } = setup();
@@ -63,6 +185,171 @@ test("a task exceeding the deadline returns {RUNNING, jobId}, later pollable to 
   assert.equal(poll.status, "DONE");
   if (poll.status !== "RUNNING" && poll.status !== "NOT_FOUND") {
     assert.equal(poll.result.status, "DONE");
+  }
+});
+
+test("background dispatch persists start and terminal records", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry, handles } = setup({ statusWriter: writer });
+  const r = await registry.dispatch(specOf({ background: true }));
+  const id = jobId(r);
+  assert.equal(writes.length, 1);
+  handles[0].finish(doneOk);
+  await flush();
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].record.status, "DONE");
+});
+
+test("idle watchdog persistence writes STALLED terminal record", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry, handles, clock } = setup({
+    statusWriter: writer,
+    idleMs: 5000,
+    deadlineMs: 100000,
+  });
+  await registry.dispatch(specOf({ background: true }));
+  assert.equal(writes.length, 1);
+  await clock.advance(5000);
+  await flush();
+  assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].record.status, "STALLED");
+});
+
+test("cancel persists CANCELLED terminal record", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry, handles } = setup({ statusWriter: writer });
+  const r = await registry.dispatch(specOf({ background: true }));
+  assert.equal(writes.length, 1);
+  await registry.cancel(jobId(r));
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].record.status, "CANCELLED");
+  assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
+});
+
+test("BUSY dispatch writes no status record", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry } = setup({ statusWriter: writer });
+  const s = () => specOf({ isWrite: true, path: "/repo", background: true });
+  await registry.dispatch(s());
+  assert.equal(writes.length, 1);
+  const before = writes.length;
+  const r2 = await registry.dispatch(s());
+  assert.equal(r2.status, "BUSY");
+  assert.equal(writes.length, before);
+});
+
+test("a throwing status writer does not affect job completion", async () => {
+  let calls = 0;
+  const statusWriter: StatusRecordWriter = {
+    write() {
+      calls++;
+      if (calls === 2) throw new Error("boom");
+    },
+  };
+  const { registry, handles } = setup({ statusWriter });
+  const p = registry.dispatch(specOf());
+  handles[0].finish(doneOk);
+  const res = (await p) as RunOutput;
+  assert.equal(res.status, "DONE");
+  assert.equal(res.text, "ok\nSTATUS: DONE");
+  assert.equal(calls, 2);
+});
+
+test("intermediate progress events do not trigger status writes", async () => {
+  const { writes, writer } = statusSpy();
+  const { registry, handles } = setup({ statusWriter: writer });
+  await registry.dispatch(specOf({ background: true }));
+  assert.equal(writes.length, 1);
+  handles[0].emitProgress({
+    lastTool: "shell",
+    tokensSoFar: 42,
+    lastAssistant: "running the test suite now",
+    filesTouched: ["src/foo.rs"],
+    phase: "running_tool",
+  });
+  assert.equal(writes.length, 1);
+  handles[0].finish(doneOk);
+  await flush();
+  assert.equal(writes.length, 2);
+});
+
+test("file status record is overwritten from RUNNING to terminal", async () => {
+  const writer = fileStatusRecordWriter();
+  const { registry, handles } = setup({ statusWriter: writer });
+  const r = await registry.dispatch(specOf({ background: true }));
+  const id = jobId(r);
+  const filePath = path.join(os.tmpdir(), "cursor-delegate-jobs", `${id}.json`);
+  const running = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.equal(running.status, "RUNNING");
+
+  handles[0].finish(doneOk);
+  await flush();
+  const terminal = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  assert.equal(terminal.status, "DONE");
+  const polled = registry.poll(id);
+  if (polled.status !== "RUNNING" && polled.status !== "NOT_FOUND") {
+    assert.deepEqual(terminal.result, polled.result);
+  }
+  fs.unlinkSync(filePath);
+});
+
+test("fileStatusRecordWriter writes independent per-job files", () => {
+  const dir = path.join(os.tmpdir(), "cursor-delegate-jobs");
+  const writer = fileStatusRecordWriter();
+  const idA = randomUUID();
+  const idB = randomUUID();
+  const recordA = {
+    status: "RUNNING" as const,
+    progress: {
+      lastTool: null,
+      tokensSoFar: 0,
+      elapsedMs: 0,
+      lastAssistant: null,
+      filesTouchedSoFar: [] as string[],
+      phase: null,
+    },
+  };
+  const recordB = {
+    status: "DONE" as const,
+    result: {
+      status: "DONE" as const,
+      text: "done",
+      sessionId: null,
+      backend: "cursor",
+      model: "composer-2.5",
+      usage: null,
+      costUsd: null,
+      costEstimated: true,
+      durationMs: null,
+      jobId: idB,
+    },
+  };
+  const cwd = process.cwd();
+  try {
+    process.chdir(os.homedir());
+    writer.write(idA, recordA);
+    writer.write(idB, recordB);
+    const pathA = path.join(dir, `${idA}.json`);
+    const pathB = path.join(dir, `${idB}.json`);
+    assert.deepEqual(JSON.parse(fs.readFileSync(pathA, "utf8")), recordA);
+    assert.deepEqual(JSON.parse(fs.readFileSync(pathB, "utf8")), recordB);
+
+    const updated = {
+      ...recordA,
+      progress: { ...recordA.progress, tokensSoFar: 99 },
+    };
+    writer.write(idA, updated);
+    assert.deepEqual(JSON.parse(fs.readFileSync(pathA, "utf8")), updated);
+  } finally {
+    process.chdir(cwd);
+    for (const id of [idA, idB]) {
+      try {
+        fs.unlinkSync(path.join(dir, `${id}.json`));
+      } catch {
+        // ignore cleanup failures
+      }
+    }
   }
 });
 
@@ -109,6 +396,25 @@ test("the idle watchdog SIGTERMs a silent job and marks it STALLED", async () =>
   assert.equal(registry.poll(jobId(r)).status, "STALLED");
 });
 
+test("a STALLED job's text summarizes last known progress instead of being empty (#9)", async () => {
+  const { registry, handles, clock } = setup({ idleMs: 5000, deadlineMs: 100000 });
+  const p = registry.dispatch(specOf());
+  handles[0].emitProgress({
+    lastTool: "shell",
+    tokensSoFar: 42,
+    lastAssistant: "running the test suite now",
+    filesTouched: ["src/foo.rs"],
+    phase: "thinking", // not "running_tool" — keep this on the short idleMs window
+  });
+  await clock.advance(5000);
+  await flush();
+  const res = (await p) as RunOutput;
+  assert.match(res.text, /shell/);
+  assert.match(res.text, /42 tokens/);
+  assert.match(res.text, /src\/foo\.rs/);
+  assert.match(res.text, /running the test suite now/);
+});
+
 test("a progress event re-arms the idle watchdog (no premature STALLED)", async () => {
   const { registry, handles, clock } = setup({ idleMs: 5000, deadlineMs: 100000 });
   const r = await registry.dispatch(specOf({ background: true }));
@@ -121,6 +427,112 @@ test("a progress event re-arms the idle watchdog (no premature STALLED)", async 
     phase: null,
   });
   await clock.advance(4000); // 8000 total, but only 4000 since the event
+  assert.deepEqual(handles[0].child.killed, []);
+  assert.equal(registry.poll(jobId(r)).status, "RUNNING");
+});
+
+test("a per-call idleMs override takes priority over the server default", async () => {
+  const { registry, handles, clock } = setup({ idleMs: 5000, deadlineMs: 100000 });
+  const r = await registry.dispatch(
+    specOf({ background: true, idleMs: 20000 }),
+  );
+  await clock.advance(5000); // would have STALLED under the 5000ms server default
+  assert.deepEqual(handles[0].child.killed, []);
+  assert.equal(registry.poll(jobId(r)).status, "RUNNING");
+  await clock.advance(15000); // 20000 total, now past the per-call override
+  await flush();
+  assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
+  assert.equal(registry.poll(jobId(r)).status, "STALLED");
+});
+
+test("a per-call idleMs: null disables the watchdog for that job", async () => {
+  const { registry, handles, clock } = setup({ idleMs: 5000, deadlineMs: 100000 });
+  const r = await registry.dispatch(
+    specOf({ background: true, idleMs: null }),
+  );
+  await clock.advance(1_000_000); // would have STALLED many times over otherwise
+  assert.deepEqual(handles[0].child.killed, []);
+  assert.equal(registry.poll(jobId(r)).status, "RUNNING");
+});
+
+test("a tool call in flight uses toolIdleMs, not idleMs, and survives past the short window", async () => {
+  const { registry, handles, clock } = setup({
+    idleMs: 5000,
+    toolIdleMs: 60000,
+    deadlineMs: 1000000,
+  });
+  const r = await registry.dispatch(specOf({ background: true }));
+  handles[0].emitProgress({
+    lastTool: "shell",
+    tokensSoFar: 1,
+    lastAssistant: null,
+    filesTouched: [],
+    phase: "running_tool",
+  });
+  await clock.advance(5000); // past idleMs, but a tool is in flight
+  assert.deepEqual(handles[0].child.killed, []);
+  assert.equal(registry.poll(jobId(r)).status, "RUNNING");
+  await clock.advance(55000); // 60000 total since the tool started — now past toolIdleMs
+  await flush();
+  assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
+  assert.equal(registry.poll(jobId(r)).status, "STALLED");
+});
+
+test("leaving the tool phase (e.g. the model responds) reverts to the short idleMs window", async () => {
+  const { registry, handles, clock } = setup({
+    idleMs: 5000,
+    toolIdleMs: 60000,
+    deadlineMs: 1000000,
+  });
+  const r = await registry.dispatch(specOf({ background: true }));
+  handles[0].emitProgress({
+    lastTool: "shell",
+    tokensSoFar: 1,
+    lastAssistant: null,
+    filesTouched: [],
+    phase: "running_tool",
+  });
+  await clock.advance(30000); // fine — still under toolIdleMs
+  handles[0].emitProgress({
+    lastTool: "shell",
+    tokensSoFar: 2,
+    lastAssistant: "done with that, thinking about next step",
+    filesTouched: [],
+    phase: "responding",
+  });
+  await clock.advance(5000); // past the short idleMs, now that no tool is in flight
+  await flush();
+  assert.deepEqual(handles[0].child.killed, ["SIGTERM"]);
+  assert.equal(registry.poll(jobId(r)).status, "STALLED");
+});
+
+test("a per-call toolIdleMs override applies only while a tool is in flight", async () => {
+  const { registry, handles, clock } = setup({
+    idleMs: 5000,
+    toolIdleMs: 60000,
+    deadlineMs: 1000000,
+  });
+  const r = await registry.dispatch(
+    specOf({ background: true, toolIdleMs: 500000 }),
+  );
+  handles[0].emitProgress({
+    lastTool: "shell",
+    tokensSoFar: 1,
+    lastAssistant: null,
+    filesTouched: [],
+    phase: "running_tool",
+  });
+  await clock.advance(60000); // past the server toolIdleMs, under the per-call override
+  assert.deepEqual(handles[0].child.killed, []);
+  assert.equal(registry.poll(jobId(r)).status, "RUNNING");
+});
+
+test("raw stdout activity re-arms the watchdog even without a fully parsed line", async () => {
+  const { registry, handles, clock } = setup({ idleMs: 5000, deadlineMs: 100000 });
+  const r = await registry.dispatch(specOf({ background: true }));
+  await clock.advance(4000);
+  handles[0].emitActivity();
+  await clock.advance(4000); // 8000 total, but only 4000 since the activity event
   assert.deepEqual(handles[0].child.killed, []);
   assert.equal(registry.poll(jobId(r)).status, "RUNNING");
 });

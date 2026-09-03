@@ -56,6 +56,7 @@ export interface FakeHandle {
   events: EventEmitter;
   emitProgress(snap: Record<string, unknown>): void;
   emitStderr(s: string): void;
+  emitActivity(): void;
   finish(r: BackendResult): void;
   /** True once `done` has resolved. */
   done: Promise<BackendResult>;
@@ -95,6 +96,7 @@ export function makeFakeBackend(): { backend: Backend; handles: FakeHandle[] } {
         events,
         emitProgress: (snap) => events.emit("progress", snap),
         emitStderr: (s) => events.emit("stderr", s),
+        emitActivity: () => events.emit("activity"),
         finish: (r) => {
           child.emitClose();
           resolveDone(r);

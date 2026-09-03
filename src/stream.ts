@@ -101,14 +101,17 @@ export function parseLine(line: string, state: StreamState): ParsedLine {
   switch (ev.type) {
     case "tool_call": {
       if (ev.subtype === "started" && ev.tool_call) {
+        // A tool is now in flight — the caller's idle watchdog uses this to switch to the
+        // wider toolIdleMs window, since a running build/test can go silent for a long time
+        // without that being a hang.
+        state.phase = "running_tool";
+        changed = true;
         const { tool, path } = extractTool(ev.tool_call as ToolCallShape);
         if (tool) {
           state.lastTool = tool;
-          changed = true;
         }
         if (path && !state.filesTouched.includes(path)) {
           state.filesTouched.push(path);
-          changed = true;
         }
       }
       break;
@@ -117,6 +120,7 @@ export function parseLine(line: string, state: StreamState): ParsedLine {
       const text = extractAssistantText(ev.message);
       if (text) {
         state.lastAssistant = text.slice(0, 200);
+        state.phase = "responding";
         changed = true;
       }
       break;

@@ -125,6 +125,26 @@ export function validateRunInput(args: Record<string, unknown>): RunInput {
     input.waitMs = args.waitMs;
   }
 
+  if (args.idleMs !== undefined) {
+    if (
+      args.idleMs !== null &&
+      (typeof args.idleMs !== "number" || !Number.isFinite(args.idleMs))
+    ) {
+      invalid("idleMs", "must be a finite number or null");
+    }
+    input.idleMs = args.idleMs as number | null;
+  }
+
+  if (args.toolIdleMs !== undefined) {
+    if (
+      args.toolIdleMs !== null &&
+      (typeof args.toolIdleMs !== "number" || !Number.isFinite(args.toolIdleMs))
+    ) {
+      invalid("toolIdleMs", "must be a finite number or null");
+    }
+    input.toolIdleMs = args.toolIdleMs as number | null;
+  }
+
   if (args.background !== undefined) {
     if (typeof args.background !== "boolean") {
       invalid("background", "must be a boolean");

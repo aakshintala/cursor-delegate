@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { finalizeRun } from "../src/finalize.js";
+import { finalizeRun, finalizeStall } from "../src/finalize.js";
 import type { BackendResult } from "../src/backends/types.js";
 import type { ChangeSet, FinalizeCtx, GateResult } from "../src/types.js";
 
@@ -115,4 +115,47 @@ test("jobId and downgraded flags propagate", async () => {
   );
   assert.equal(out.jobId, "job-1");
   assert.equal(out.downgraded, true);
+});
+
+const stalledResult: BackendResult = {
+  raw: {}, // killed before any `result` line arrived — nothing to read a status/text from
+  cleanExit: false,
+  stderr: "",
+};
+
+test("finalizeStall still computes the change-set (#9)", async () => {
+  const out = await finalizeStall(
+    stalledResult,
+    baseCtx({ isWrite: true, headBefore: "aaa", gitDelta: async () => dirtyCommitted }),
+  );
+  assert.deepEqual(out.changeSet, dirtyCommitted);
+});
+
+test("finalizeStall never runs the gate, even when one is configured", async () => {
+  let ran = false;
+  const out = await finalizeStall(
+    stalledResult,
+    baseCtx({
+      gate: "make test",
+      runGate: async () => {
+        ran = true;
+        return { command: "make test", exitCode: 0, passed: true, outputTail: "" };
+      },
+    }),
+  );
+  assert.equal(ran, false);
+  assert.equal(out.gateResult, undefined);
+});
+
+test("finalizeStall never raises the incomplete-commit concern", async () => {
+  const out = await finalizeStall(
+    stalledResult,
+    baseCtx({ isWrite: true, headBefore: "aaa", gitDelta: async () => dirtyCommitted }),
+  );
+  assert.equal(out.concerns, undefined);
+});
+
+test("finalizeStall carries stderrTail when the child wrote to stderr", async () => {
+  const out = await finalizeStall({ ...stalledResult, stderr: "boom" }, baseCtx());
+  assert.equal(out.stderrTail, "boom");
 });

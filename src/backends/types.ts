@@ -20,7 +20,11 @@ export interface ProgressSnapshotRaw {
 
 export interface BackendHandle {
   child: ChildProcess;
-  /** Emits "progress" (ProgressSnapshotRaw) and "stderr" (string). */
+  /**
+   * Emits "progress" (ProgressSnapshotRaw), "stderr" (string), and "activity" (no payload) —
+   * "activity" fires on any raw stdout chunk, even one that doesn't complete a parseable line, so
+   * the idle watchdog can treat it as liveness without waiting for a full semantic event.
+   */
   events: EventEmitter;
   done: Promise<BackendResult>;
 }

@@ -375,6 +375,10 @@ Parser rules:
 - **Any** event carrying a `usage.outputTokens` number updates `tokensSoFar` (so the live token
   count generally only populates at the terminal `result`).
 - Only `tool_call` with `subtype:"started"` updates `lastTool`/`filesTouched`.
+- `phase` tracks current activity: `tool_call:started` → `"running_tool"`, `assistant` text →
+  `"responding"`, `thinking:delta` → `"thinking"`. The registry's idle watchdog uses `"running_tool"`
+  to switch from `idleMs` to the wider `toolIdleMs` — a running build/test going silent for minutes
+  is not a hang, but silence with no tool in flight (waiting on the model itself) still is.
 - Buffer stdout and split on `\n`; on process close, flush a trailing line that arrived without a
   terminating newline (the `result` line often does).
 
@@ -410,8 +414,9 @@ pathLock:  Map<path, jobId>          // CallerProvided write path → in-flight 
 2. Generate a UUID jobId; `backend.run(spec)` spawns the child and returns `{child, events, done}`.
 3. Register the job in `active`; if write+path, set `pathLock`.
 4. Wire the caller's `ProgressSink` (if any) into `job.sinks`. On each `progress` event: update live
-   fields, bump `lastEventAt`, **re-arm the idle watchdog**, and fan out a `ProgressUpdate` to every
-   sink. `stderr` events also re-arm the watchdog.
+   fields (incl. `phase`), bump `lastEventAt`, **re-arm the idle watchdog**, and fan out a
+   `ProgressUpdate` to every sink. `stderr` and raw stdout `activity` events also re-arm the watchdog
+   without waiting for a full parsed line.
 5. `job.completion = done.then(finalizeJob, finalizeJobError)`.
 6. **If `background:true`** → drop the sink and return `{RUNNING, jobId, busyPath?}` immediately.
 7. Otherwise race three promises: `completion` vs a **deadline timer** vs the optional abort signal.
@@ -423,9 +428,12 @@ pathLock:  Map<path, jobId>          // CallerProvided write path → in-flight 
 ### 6.3 Reaping (there is no fixed total-runtime cap)
 Three and only three ways a job dies:
 - **cancel** — SIGTERM, mark `CANCELLED`, await completion.
-- **idle watchdog** — if no stream/stderr event arrives for `idleMs` (default 180000; `null`
-  disables), SIGTERM and mark `STALLED`. Reaps genuinely-hung agents without an attentive caller and
-  frees the path lock. Never kills a slow-but-working agent (events keep flowing).
+- **idle watchdog** — tiered by `phase` (#9): if no stream/stderr/stdout-activity arrives for
+  `idleMs` (default 300000; `null` disables) while no tool is in flight, or for the wider
+  `toolIdleMs` (default 1800000; `null` disables) while `phase === "running_tool"`, SIGTERM and mark
+  `STALLED`. Reaps genuinely-hung agents without an attentive caller and frees the path lock. Never
+  kills a slow-but-working agent (events, or even raw bytes, keep flowing) — and no longer kills an
+  agent that is legitimately mid-build/mid-test with nothing to say in the meantime.
 - **shutdown** — on SIGTERM/SIGINT/exit, `killAll()` SIGTERMs every active child so ending the host
   session never leaves reparented orphans mutating the repo.
 
@@ -674,6 +682,7 @@ These `#N` tags appear throughout the code and this spec:
 | #6 | Tool-computed git change-set (ground truth, not self-report) | `git.ts`, `finalize.ts` |
 | #7 | Tool-run `gate` postcondition (tool-enforced) | `gate.ts`, `finalize.ts` |
 | #8 | Same-path write serialization (BUSY, no queue) | `job-registry.ts` |
+| #9 | Per-call `idleMs`/`toolIdleMs` overrides; tiered idle watchdog (`phase`-aware: wider window while a tool call is in flight); raw stdout `activity` also re-arms; CANCELLED/STALLED still compute the change-set (`finalizeStall`, skips only gate + incomplete-commit) and `text` summarizes the job's last known progress instead of being empty | `job-registry.ts`, `stream.ts`, `backends/cursor.ts`, `finalize.ts`, `runner.ts`, `tool-schemas.ts` |
 
 ---
 
@@ -691,7 +700,7 @@ spec/quality reviewers** (different allow-list engines from the implementer, `re
 true`). Plan-writing uses `grok-4.5-xhigh` with `ask`/`plan`. Reproduce this as documentation, not
 logic.
 
-`plugin/skills/delegate/SKILL.md` (+ `reference.md`) is the orchestration playbook: when to
+`skills/delegate/SKILL.md` (+ `reference.md`) is the orchestration playbook: when to
 delegate, model picks, the plan / `NEEDS_CONTEXT` / `cursor_answer` resume flow, and the plan-writer
 brief template. Ship it with the plugin; it is not executed by the server.
 
@@ -701,12 +710,14 @@ brief template. Ship it with the plugin; it is not executed by the server.
 
 ### 13.1 As a Claude Code plugin
 ```jsonc
-// plugin/plugin.json
-{ "name":"cursor-delegate", "version":"0.1.0", "description":"...", "mcpServers":".mcp.json" }
-// plugin/.mcp.json
+// plugin.json in .claude-plugin/
+{ "name":"cursor-delegate", "version":"0.2.0", "description":"...", "skills":["./skills/delegate"] }
+// marketplace.json in .claude-plugin/ (cursor-delegate-local)
+// .mcp.json at repo root
 { "mcpServers": { "cursor-delegate": {
-    "type":"stdio", "command":"node", "args":["${CLAUDE_PLUGIN_ROOT}/../dist/index.js"] } } }
+    "type":"stdio", "command":"node", "args":["${CLAUDE_PLUGIN_ROOT}/dist/index.js"], "timeout":600000 } } }
 ```
+Install: `claude plugin marketplace add ./` then `claude plugin install cursor-delegate@cursor-delegate-local`.
 
 ### 13.2 Build & register (`bin/setup.sh`, portable Linux/macOS)
 1. Resolve **this machine's** `node` (`command -v node`) — never bake a path.
@@ -715,12 +726,13 @@ brief template. Ship it with the plugin; it is not executed by the server.
 4. Scaffold a **minimal** `~/.config/cursor-delegate/host-profile.json` (`requiredDeny: []` and
    empty policy defaults) **only if absent**; never overwrite an existing profile or the cli-config
    deny-list. Optional keys `default` / `models` extend or override the bundled allow-list.
-5. Register at user scope: `claude mcp add <name> -s user -- "<node>" "<dist>/index.js"` (idempotent:
-   remove-then-add). `DRY_RUN=1` previews without changes.
+5. Install plugin at user scope: `claude plugin marketplace add ./ --scope user` then
+   `claude plugin install cursor-delegate@cursor-delegate-local --scope user`. `DRY_RUN=1` previews
+   without changes.
 
-### 13.3 Manual register (no `claude` CLI)
-`claude mcp add cursor-delegate -s user -- <node> <repo>/dist/index.js`, or add the stdio entry to
-your MCP client's config directly.
+### 13.3 Manual install (no `claude` CLI)
+Add the stdio entry from `.mcp.json` to your MCP client's config directly (resolve
+`${CLAUDE_PLUGIN_ROOT}` to the installed plugin cache path).
 
 ### 13.4 package.json essentials
 ```jsonc

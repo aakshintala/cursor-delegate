@@ -99,6 +99,16 @@ export function buildRunInputSchema(
         description:
           "How long to block before auto-detaching to a jobId. Clamped to [1000, 600000]. Default ~60s.",
       },
+      idleMs: {
+        type: ["number", "null"],
+        description:
+          "Override the idle watchdog window applied while NO tool call is in flight (i.e. waiting on the model itself) — a silence here is a real hang signal. null disables it for this job. Defaults to the server profile's idleMs (currently 300000ms / 5min). You usually don't need this: a running tool call uses the separate, wider toolIdleMs window automatically.",
+      },
+      toolIdleMs: {
+        type: ["number", "null"],
+        description:
+          "Override the idle watchdog window applied while a tool call IS in flight (e.g. a shell command, build, or test suite) — this can legitimately go silent for a long time, so it defaults much wider than idleMs. null disables the watchdog for in-flight tool calls on this job. Defaults to the server profile's toolIdleMs (currently 1800000ms / 30min).",
+      },
       background: {
         type: "boolean",
         description: "Return {status:'RUNNING', jobId} immediately without blocking.",
@@ -166,7 +176,7 @@ export function buildTools(config: Pick<Config, "default" | "models">) {
     {
       name: "cursor_poll",
       description:
-        "Non-blocking status check for a jobId. Returns {RUNNING, progress} or {<terminal>, result} or {NOT_FOUND}.",
+        "Non-blocking status check for a jobId. Returns {RUNNING, progress, lastHeartbeatAt, supersededBy?} or {<terminal>, result, supersededBy?} or {NOT_FOUND}. lastHeartbeatAt (server ms) lets you detect a dead server; supersededBy points at the new jobId when a NEEDS_CONTEXT job was resumed.",
       inputSchema: JOB_ID_SCHEMA,
     },
     {

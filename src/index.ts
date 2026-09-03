@@ -160,7 +160,11 @@ export async function buildDeps(): Promise<ServerDeps> {
     backend: makeCursorAdapter(),
     deadlineMs: config.profile.deadlineMs ?? 60000,
     idleMs:
-      config.profile.idleMs === undefined ? 180000 : config.profile.idleMs,
+      config.profile.idleMs === undefined ? 300000 : config.profile.idleMs,
+    toolIdleMs:
+      config.profile.toolIdleMs === undefined
+        ? 1800000
+        : config.profile.toolIdleMs,
   });
 
   return { config, registry, cliConfig, serverCwd: process.cwd() };

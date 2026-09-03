@@ -11,11 +11,23 @@ import type {
 } from "./types.js";
 import type { Backend, BackendResult, ProgressSnapshotRaw } from "./backends/types.js";
 import type { ProgressSink, ProgressUpdate } from "./progress.js";
-import { finalizeRun as defaultFinalize, baseOutput } from "./finalize.js";
+import {
+  finalizeRun as defaultFinalize,
+  finalizeStall as defaultFinalizeStall,
+} from "./finalize.js";
+import {
+  fileStatusRecordWriter,
+  type StatusRecordWriter,
+} from "./status-record.js";
 import { clampWait } from "./util.js";
+
+export type { StatusRecordWriter } from "./status-record.js";
+export { fileStatusRecordWriter } from "./status-record.js";
 
 const COMPLETED_CAP = 100;
 const DEFAULT_WAIT_TIMEOUT = 120000;
+/** How often a RUNNING job's status record is refreshed on disk. */
+const HEARTBEAT_MS = 30_000;
 
 // ---- injectable clock (for deterministic tests) ----
 export type TimerHandle = unknown;
@@ -45,9 +57,29 @@ interface Job {
   lastEventAt: number;
   terminationReason: "CANCELLED" | "STALLED" | null;
   idleTimer: TimerHandle | null;
+  heartbeatTimer: TimerHandle | null;
+  supersededBy: string | null;
   completion: Promise<RunOutput>;
   terminalOutput: RunOutput | null;
   sinks: Set<ProgressSink>;
+}
+
+/**
+ * A CANCELLED/STALLED job never gets a terminal `result` line, so there is no `text` to
+ * report from the backend. Build one from whatever live progress the registry already
+ * tracked, so the caller learns something concrete instead of an empty string.
+ */
+function describeStallProgress(job: Job, elapsedMs: number): string {
+  const verb = job.terminationReason === "CANCELLED" ? "Cancelled" : "Idle watchdog killed this job";
+  const parts = [`${verb} after ${Math.round(elapsedMs / 1000)}s.`];
+  if (job.phase) parts.push(`Last phase: ${job.phase}.`);
+  if (job.lastTool) parts.push(`Last tool: ${job.lastTool}.`);
+  if (job.tokensSoFar > 0) parts.push(`${job.tokensSoFar} tokens streamed before the kill.`);
+  if (job.lastAssistant) parts.push(`Last assistant text: "${job.lastAssistant}"`);
+  if (job.filesTouched.length > 0) {
+    parts.push(`Files touched: ${job.filesTouched.join(", ")}.`);
+  }
+  return parts.join(" ");
 }
 
 export interface DispatchOpts {
@@ -69,6 +101,8 @@ export interface JobRegistry {
   dispatch(spec: JobSpec, opts?: DispatchOpts): Promise<DispatchResult>;
   poll(jobId: string): PollResult;
   cancel(jobId: string): Promise<PollResult>;
+  /** Record that `oldJobId` continues under `newJobId` (resume path) so watchers can follow the chain. */
+  markSuperseded(oldJobId: string, newJobId: string): PollResult;
   wait(jobId: string, timeoutMs?: number, opts?: WaitOpts): Promise<PollResult>;
   waitAny(
     jobIds: string[],
@@ -88,14 +122,29 @@ export interface RegistryDeps {
   backend: Backend;
   deadlineMs: number;
   idleMs: number | null;
+  /** Wider idle window applied while a tool call is in flight (`job.phase === "running_tool"`). */
+  toolIdleMs: number | null;
   clock?: Clock;
   finalize?: (res: BackendResult, ctx: FinalizeCtx) => Promise<RunOutput>;
+  finalizeStall?: (res: BackendResult, ctx: FinalizeCtx) => Promise<RunOutput>;
+  statusWriter?: StatusRecordWriter;
 }
 
 export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
-  const { backend, deadlineMs, idleMs } = deps;
+  const { backend, deadlineMs, idleMs, toolIdleMs } = deps;
   const clock = deps.clock ?? realClock;
   const finalize = deps.finalize ?? defaultFinalize;
+  const finalizeStall = deps.finalizeStall ?? defaultFinalizeStall;
+  const baseStatusWriter = deps.statusWriter ?? fileStatusRecordWriter();
+  const statusWriter: StatusRecordWriter = {
+    write(jobId, record) {
+      try {
+        baseStatusWriter.write(jobId, record);
+      } catch {
+        // conforming writers never throw; swallow misbehaving injectables too
+      }
+    },
+  };
 
   const active = new Map<string, Job>();
   const completed = new Map<string, Job>();
@@ -109,6 +158,10 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     if (job.idleTimer) {
       clock.clearTimer(job.idleTimer);
       job.idleTimer = null;
+    }
+    if (job.heartbeatTimer) {
+      clock.clearTimer(job.heartbeatTimer);
+      job.heartbeatTimer = null;
     }
     job.status = job.terminationReason ?? out.status;
     job.terminalOutput = out;
@@ -127,6 +180,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       if (oldest === undefined) break;
       completed.delete(oldest);
     }
+    statusWriter.write(job.id, poll(job.id));
   }
 
   function dispatch(spec: JobSpec, opts: DispatchOpts = {}): Promise<DispatchResult> {
@@ -156,23 +210,49 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       lastEventAt: clock.now(),
       terminationReason: null,
       idleTimer: null,
+      heartbeatTimer: null,
+      supersededBy: null,
       completion: Promise.resolve(null as unknown as RunOutput), // replaced below
       terminalOutput: null,
       sinks: new Set(),
     };
     active.set(jobId, job);
+    statusWriter.write(jobId, poll(jobId));
     if (spec.isWrite && spec.path) pathLock.set(spec.path, jobId);
 
+    // Per-call override wins when present (including explicit `null` to disable);
+    // omitted falls back to the server-wide default.
+    const effectiveIdleMs = spec.idleMs !== undefined ? spec.idleMs : idleMs;
+    const effectiveToolIdleMs =
+      spec.toolIdleMs !== undefined ? spec.toolIdleMs : toolIdleMs;
+    // Tiered by phase (#9): a tool call in flight can go silent for a long time
+    // legitimately (a build, a test suite) — that isn't a hang. No tool in flight and no
+    // event arriving means we're waiting on the model itself, where a short silence really
+    // is anomalous. Re-evaluated on every arm, since phase can change between events.
     const armIdle = () => {
-      if (idleMs === null) return;
+      const window =
+        job.phase === "running_tool" ? effectiveToolIdleMs : effectiveIdleMs;
+      if (window === null) return;
       if (job.idleTimer) clock.clearTimer(job.idleTimer);
-      job.idleTimer = clock.setTimer(idleMs, () => {
+      job.idleTimer = clock.setTimer(window, () => {
         if (job.status !== "RUNNING") return;
         job.terminationReason = "STALLED";
         job.child?.kill("SIGTERM");
       });
     };
     armIdle();
+
+    // Heartbeat: refresh the status record periodically so a long RUNNING job keeps its
+    // progress current on disk and a frozen record (dead server) is detectable via
+    // lastHeartbeatAt instead of looking like an active-but-idle job.
+    const armHeartbeat = () => {
+      job.heartbeatTimer = clock.setTimer(HEARTBEAT_MS, () => {
+        if (job.status !== "RUNNING") return;
+        statusWriter.write(job.id, poll(job.id));
+        armHeartbeat();
+      });
+    };
+    armHeartbeat();
 
     const clearIdle = () => {
       if (job.idleTimer) {
@@ -205,22 +285,16 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       job.lastEventAt = clock.now();
       armIdle();
     });
+    // Raw stdout bytes, even ones that don't complete a parseable line yet — cheap extra
+    // liveness signal on top of the phase tiering, though it won't help when cursor-agent
+    // buffers a tool's entire output until the tool finishes.
+    handle.events.on("activity", () => {
+      job.lastEventAt = clock.now();
+      armIdle();
+    });
 
     const finalizeJob = async (res: BackendResult): Promise<RunOutput> => {
       clearIdle();
-
-      // Cancel/stall: skip finalize entirely (gate side effects + git) — #6.
-      if (job.terminationReason) {
-        const out = baseOutput(res, {
-          model: spec.model,
-          backend: spec.backend,
-          priceMap: spec.priceMap,
-          jobId: job.id,
-          downgraded: spec.downgraded,
-        });
-        retire(job, out);
-        return out;
-      }
 
       const ctx: FinalizeCtx = {
         cwd: spec.cwd,
@@ -235,6 +309,19 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
         downgraded: spec.downgraded,
         worktreeName: spec.worktreeName,
       };
+
+      // Cancel/stall (#9): no gate (meaningless against a killed-mid-flight run) and no
+      // incomplete-commit concern, but still compute the change-set — whatever the agent
+      // already wrote before the kill is exactly what a caller needs to decide whether to
+      // keep, discard, or redispatch — and surface the job's last known live progress as
+      // `text`, since the backend never got a terminal `result` line to report from.
+      if (job.terminationReason) {
+        const out = await finalizeStall(res, ctx);
+        out.text = describeStallProgress(job, clock.now() - job.startedAt);
+        retire(job, out);
+        return out;
+      }
+
       const out = await finalize(res, ctx);
       retire(job, out);
       return out;
@@ -318,6 +405,8 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     if (job.status === "RUNNING") {
       return {
         status: "RUNNING",
+        lastHeartbeatAt: clock.now(),
+        ...(job.supersededBy ? { supersededBy: job.supersededBy } : {}),
         progress: {
           lastTool: job.lastTool,
           tokensSoFar: job.tokensSoFar,
@@ -331,7 +420,16 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     return {
       status: job.status as Exclude<JobStatus, "RUNNING">,
       result: job.terminalOutput!,
+      ...(job.supersededBy ? { supersededBy: job.supersededBy } : {}),
     };
+  }
+
+  function markSuperseded(oldJobId: string, newJobId: string): PollResult {
+    const job = getJob(oldJobId);
+    if (!job) return { status: "NOT_FOUND" };
+    job.supersededBy = newJobId;
+    statusWriter.write(job.id, poll(job.id));
+    return poll(job.id);
   }
 
   function lookupAnswer(jobId: string): AnswerLookup {
@@ -499,5 +597,5 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     }
   }
 
-  return { dispatch, poll, cancel, wait, waitAny, waitAll, killAll, lookupAnswer };
+  return { dispatch, poll, cancel, markSuperseded, wait, waitAny, waitAll, killAll, lookupAnswer };
 }

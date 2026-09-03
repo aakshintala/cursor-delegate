@@ -23,6 +23,7 @@ test("live: an ask task returns a terminal RunOutput", { skip: !process.env.CURS
     backend: makeCursorAdapter(),
     deadlineMs: 120000,
     idleMs: 180000,
+    toolIdleMs: 1800000,
   });
 
   const res = (await runDelegation(

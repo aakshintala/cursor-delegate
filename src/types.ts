@@ -19,6 +19,10 @@ export interface RunInput {
   gate?: string;
   allowPartialCommit?: boolean;
   waitMs?: number;
+  /** Per-call idle watchdog override. `null` disables it for this job. Falls back to the server default when omitted. */
+  idleMs?: number | null;
+  /** Per-call override of the in-tool idle window. `null` disables it for this job. Falls back to the server default when omitted. */
+  toolIdleMs?: number | null;
   background?: boolean;
 }
 
@@ -121,6 +125,8 @@ export interface HostProfile {
   gate?: string;
   deadlineMs?: number;
   idleMs?: number | null;
+  /** Idle window applied while a tool call is in flight (no event since it started). Wider than idleMs; a hung build/test still eventually dies. */
+  toolIdleMs?: number | null;
 }
 
 export interface Config {
@@ -160,12 +166,31 @@ export interface DoctorModelMenuInfo {
   error?: string;
 }
 
+export interface PluginRegistrationCheck {
+  /** settings.json enabledPlugins[pluginId] === true */
+  enabled: boolean;
+  /** `claude mcp get <serverName>` exited 0 — some server is live under this name, plugin- or
+   * raw-sourced. */
+  reachable: boolean;
+  /** Only meaningful when `reachable`: the live server under `serverName` is plugin-launched
+   * — Claude Code injected `CLAUDE_PLUGIN_ROOT` into its Environment block — not a raw
+   * hand-added registration. */
+  resolvesToPluginInstall: boolean;
+  /** `claude mcp get` for the bare legacy name exited non-zero — no raw `cursor-delegate`
+   * registration is live (desired post-migration state). */
+  legacyAbsent: boolean;
+  ok: boolean;
+  /** Human-readable detail lines, one per failing sub-check. */
+  detail: string[];
+}
+
 export interface DoctorReport {
   ok: boolean;
   plugin: DoctorPluginInfo;
   agent: DoctorAgentInfo;
   account: DoctorAccountInfo;
   modelMenu: DoctorModelMenuInfo;
+  pluginRegistration: PluginRegistrationCheck;
   warnings: string[];
   failures: string[];
 }
@@ -195,6 +220,10 @@ export interface JobSpec {
   gate: string; // "" = no gate
   allowPartialCommit: boolean;
   waitMs?: number;
+  /** Per-call idle watchdog override. `null` disables it for this job. Falls back to the server default when omitted. */
+  idleMs?: number | null;
+  /** Per-call override of the in-tool idle window. `null` disables it for this job. Falls back to the server default when omitted. */
+  toolIdleMs?: number | null;
   background?: boolean;
   priceMap: PriceMap;
   downgraded: boolean;
@@ -226,8 +255,19 @@ export interface ProgressSnapshot {
 }
 
 export type PollResult =
-  | { status: "RUNNING"; progress: ProgressSnapshot }
-  | { status: Exclude<JobStatus, "RUNNING">; result: RunOutput }
+  | {
+      status: "RUNNING";
+      progress: ProgressSnapshot;
+      /** Server clock at the last record refresh; consumers compare against their own clock to detect a dead server. */
+      lastHeartbeatAt?: number;
+      supersededBy?: string;
+    }
+  | {
+      status: Exclude<JobStatus, "RUNNING">;
+      result: RunOutput;
+      /** Set when a resume of this job (e.g. after NEEDS_CONTEXT) continues under a new jobId. */
+      supersededBy?: string;
+    }
   | { status: "NOT_FOUND" };
 
 export type DispatchResult =

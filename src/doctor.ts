@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCursorBin } from "./cursor-bin.js";
@@ -8,6 +9,7 @@ import type {
   DoctorAccountInfo,
   DoctorModelMenuInfo,
   DoctorReport,
+  PluginRegistrationCheck,
   Config,
 } from "./types.js";
 
@@ -209,12 +211,153 @@ export async function defaultReadPackageVersion(): Promise<string> {
   return pkg.version;
 }
 
+/** Parse `claude mcp get` output (indented `Label: value` plus Environment KEY=value lines). */
+function parseMcpGet(stdout: string): {
+  scope: string | null;
+  hasPluginRoot: boolean;
+} {
+  const fields = new Map<string, string>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const colonIdx = line.indexOf(":");
+    if (colonIdx === -1) continue;
+    const label = line.slice(0, colonIdx).trim().toLowerCase();
+    if (!label) continue;
+    const value = line.slice(colonIdx + 1).trim();
+    fields.set(label, value);
+  }
+
+  let hasPluginRoot = false;
+  const lines = stdout.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const envMatch = lines[i].match(/^(\s*)Environment:\s*$/);
+    if (!envMatch) continue;
+    const envIndent = envMatch[1].length;
+    for (let j = i + 1; j < lines.length; j++) {
+      const inner = lines[j];
+      if (inner.trim() === "") continue;
+      const innerIndent = inner.match(/^(\s*)/)?.[1].length ?? 0;
+      if (innerIndent <= envIndent) break;
+      if (/^\s*CLAUDE_PLUGIN_ROOT=/.test(inner)) {
+        hasPluginRoot = true;
+        break;
+      }
+    }
+    break;
+  }
+
+  return {
+    scope: fields.get("scope") ?? null,
+    hasPluginRoot,
+  };
+}
+
+export type ReadJsonResult =
+  | { exists: true; value: unknown }
+  | { exists: false }
+  | { exists: true; parseError: true };
+
+export interface CheckPluginRegistrationDeps {
+  readJson?: (path: string) => ReadJsonResult;
+  runCommand?: RunAgentCommandFn;
+  homeDir?: string;
+  pluginId?: string;
+  serverName?: string;
+  legacyServerName?: string;
+}
+
+function defaultReadJson(path: string): ReadJsonResult {
+  if (!existsSync(path)) return { exists: false };
+  try {
+    const raw = readFileSync(path, "utf8");
+    return { exists: true, value: JSON.parse(raw) as unknown };
+  } catch {
+    return { exists: true, parseError: true };
+  }
+}
+
+export async function checkPluginRegistration(
+  deps?: CheckPluginRegistrationDeps,
+): Promise<PluginRegistrationCheck> {
+  const readJson = deps?.readJson ?? defaultReadJson;
+  const runCommand = deps?.runCommand ?? defaultRunAgentCommand;
+  const homeDir = deps?.homeDir ?? homedir();
+  const pluginId = deps?.pluginId ?? "cursor-delegate@cursor-delegate-local";
+  const serverName = deps?.serverName ?? "plugin:cursor-delegate:cursor-delegate";
+  const legacyServerName = deps?.legacyServerName ?? "cursor-delegate";
+
+  const detail: string[] = [];
+
+  const settingsPath = join(homeDir, ".claude", "settings.json");
+  const settings = readJson(settingsPath);
+  let enabled = false;
+  if (settings.exists === false) {
+    // not enabled; no detail for missing file
+  } else if ("parseError" in settings && settings.parseError) {
+    detail.push("settings.json exists but could not be parsed");
+  } else if ("value" in settings) {
+    const value = settings.value;
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+    ) {
+      const plugins = (
+        value as { enabledPlugins?: Record<string, boolean> }
+      ).enabledPlugins;
+      enabled = plugins?.[pluginId] === true;
+    }
+    if (!enabled) {
+      detail.push(`${pluginId} is not enabled in settings.json`);
+    }
+  }
+
+  const mcpGet = await runCommand("claude", ["mcp", "get", serverName]);
+  let reachable = false;
+  let resolvesToPluginInstall = false;
+  if (!mcpGet.ok) {
+    detail.push(
+      `no MCP server named "${serverName}" is currently registered`,
+    );
+  } else {
+    reachable = true;
+    const { hasPluginRoot } = parseMcpGet(mcpGet.stdout);
+    // Plugin-launched servers have CLAUDE_PLUGIN_ROOT in the Environment block;
+    // raw hand-added `claude mcp add` entries never do.
+    resolvesToPluginInstall = hasPluginRoot;
+    if (!resolvesToPluginInstall) {
+      detail.push(
+        `${serverName} is registered but not plugin-sourced (no CLAUDE_PLUGIN_ROOT in its environment) — a raw registration is still live`,
+      );
+    }
+  }
+
+  const legacyGet = await runCommand("claude", ["mcp", "get", legacyServerName]);
+  const legacyAbsent = !legacyGet.ok;
+  if (!legacyAbsent) {
+    detail.push(
+      `a server is still registered under the bare name "${legacyServerName}" — the legacy raw registration may have been reintroduced`,
+    );
+  }
+
+  const ok =
+    enabled && reachable && resolvesToPluginInstall && legacyAbsent;
+  return {
+    enabled,
+    reachable,
+    resolvesToPluginInstall,
+    legacyAbsent,
+    ok,
+    detail,
+  };
+}
+
 export interface RunDoctorOpts {
   config: Pick<Config, "models">;
   resolveBin?: (override?: string) => string;
   binExists?: BinExistsFn;
   runCommand?: RunAgentCommandFn;
   readPackageVersion?: ReadPackageVersionFn;
+  checkPluginRegistration?: () => Promise<PluginRegistrationCheck>;
   /** Reserved; currently ignored. */
   deep?: boolean;
 }
@@ -226,6 +369,8 @@ export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorReport> {
   const runCommand = opts.runCommand ?? defaultRunAgentCommand;
   const readPackageVersion =
     opts.readPackageVersion ?? defaultReadPackageVersion;
+  const checkPluginRegistrationFn =
+    opts.checkPluginRegistration ?? (() => checkPluginRegistration());
 
   const warnings: string[] = [];
   const failures: string[] = [];
@@ -241,6 +386,7 @@ export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorReport> {
 
   const path = resolveBin();
   const configuredIds = Object.keys(opts.config.models);
+  const pluginRegistration = await checkPluginRegistrationFn();
 
   if (!binExists(path)) {
     return {
@@ -267,6 +413,7 @@ export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorReport> {
         note: PRICES_NOTE,
         error: "skipped: cursor-agent not found",
       },
+      pluginRegistration,
       warnings,
       failures: [
         ...failures,
@@ -308,6 +455,7 @@ export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorReport> {
     },
     account,
     modelMenu,
+    pluginRegistration,
     warnings,
     failures,
   };

@@ -293,16 +293,21 @@ test("JobSpec.resumeContext defaults capability ask and profile gate", async () 
 
 function registryWithLookup(
   lookup: (jobId: string) => AnswerLookup,
-): { registry: JobRegistry; last: () => JobSpec } {
+): { registry: JobRegistry; last: () => JobSpec; superseded: Array<[string, string]> } {
   let captured: JobSpec | undefined;
+  const superseded: Array<[string, string]> = [];
   const registry = {
     dispatch: async (spec: JobSpec): Promise<DispatchResult> => {
       captured = spec;
       return { status: "RUNNING", jobId: "j-resume" };
     },
+    markSuperseded: (oldId: string, newId: string) => {
+      superseded.push([oldId, newId]);
+      return { status: "NOT_FOUND" } as const;
+    },
     lookupAnswer: lookup,
   } as unknown as JobRegistry;
-  return { registry, last: () => captured! };
+  return { registry, last: () => captured!, superseded };
 }
 
 const parkedCtx: ResumeContext = {
@@ -317,7 +322,7 @@ const parkedCtx: ResumeContext = {
 };
 
 test("answerDelegation resumes with --resume and original run context", async () => {
-  const { registry, last } = registryWithLookup(() => ({
+  const { registry, last, superseded } = registryWithLookup(() => ({
     ok: true,
     sessionId: "sess-9",
     resumeContext: parkedCtx,
@@ -339,6 +344,7 @@ test("answerDelegation resumes with --resume and original run context", async ()
     path: "/repo",
   });
   assert.deepEqual(spec.resumeContext.verifyCommands, ["x test"]);
+  assert.deepEqual(superseded, [["job-1", "j-resume"]]);
 });
 
 test("answerDelegation returns NOT_FOUND for unknown jobId", async () => {

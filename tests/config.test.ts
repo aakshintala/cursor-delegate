@@ -103,3 +103,62 @@ test("throws when merged default is absent from models", async () => {
     /default/,
   );
 });
+
+test("rejects malformed model entry (non-finite price)", async () => {
+  const bad = JSON.stringify({
+    default: "m",
+    models: { m: { label: "M", family: "f", price: { input: NaN, output: 1, cacheRead: 0, cacheWrite: 0 } } },
+  });
+  await assert.rejects(
+    () => loadConfig({ modelsPath: "/m.json", readFile: reader({ "/m.json": bad }) }),
+    /price\.input/,
+  );
+});
+
+test("rejects malformed model entry (missing price field)", async () => {
+  const bad = JSON.stringify({
+    default: "m",
+    models: { m: { label: "M", family: "f", price: { input: 1, output: 1, cacheRead: 0 } } },
+  });
+  await assert.rejects(
+    () => loadConfig({ modelsPath: "/m.json", readFile: reader({ "/m.json": bad }) }),
+    /price\.cacheWrite/,
+  );
+});
+
+test("rejects malformed host profile (deadlineMs not a positive number)", async () => {
+  const profile = JSON.stringify({ deadlineMs: "soon" });
+  await assert.rejects(
+    () =>
+      loadConfig({
+        modelsPath: "/m.json",
+        hostProfilePath: "/p.json",
+        readFile: reader({ "/m.json": modelsDefault, "/p.json": profile }),
+      }),
+    /deadlineMs/,
+  );
+});
+
+test("rejects malformed host profile (requiredDeny not string array)", async () => {
+  const profile = JSON.stringify({ requiredDeny: [1, 2] });
+  await assert.rejects(
+    () =>
+      loadConfig({
+        modelsPath: "/m.json",
+        hostProfilePath: "/p.json",
+        readFile: reader({ "/m.json": modelsDefault, "/p.json": profile }),
+      }),
+    /requiredDeny/,
+  );
+});
+
+test("accepts null idleMs / toolIdleMs (disabled watchdog)", async () => {
+  const profile = JSON.stringify({ idleMs: null, toolIdleMs: null, deadlineMs: 1000 });
+  const cfg = await loadConfig({
+    modelsPath: "/m.json",
+    hostProfilePath: "/p.json",
+    readFile: reader({ "/m.json": modelsDefault, "/p.json": profile }),
+  });
+  assert.equal(cfg.profile.idleMs, null);
+  assert.equal(cfg.profile.toolIdleMs, null);
+});

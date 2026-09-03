@@ -5,6 +5,7 @@ import type {
   Config,
   HostProfile,
   ModelEntry,
+  Price,
   PriceMap,
 } from "./types.js";
 import type { CliConfig } from "./safety.js";
@@ -27,6 +28,131 @@ async function readJson<T>(
   }
 }
 
+// --- seam validation: config is the one place JSON is trusted; everything
+// downstream may assume these shapes (review #5). ---
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function str(obj: Record<string, unknown>, field: string, where: string): string {
+  const v = obj[field];
+  if (typeof v !== "string") {
+    throw new Error(`invalid config: ${where}.${field} must be a string`);
+  }
+  return v;
+}
+
+function optStr(obj: Record<string, unknown>, field: string, where: string): string | undefined {
+  const v = obj[field];
+  if (v === undefined) return undefined;
+  if (typeof v !== "string") {
+    throw new Error(`invalid config: ${where}.${field} must be a string`);
+  }
+  return v;
+}
+
+function optStrArray(obj: Record<string, unknown>, field: string, where: string): string[] | undefined {
+  const v = obj[field];
+  if (v === undefined) return undefined;
+  if (
+    !Array.isArray(v) ||
+    v.some((x) => typeof x !== "string")
+  ) {
+    throw new Error(`invalid config: ${where}.${field} must be an array of strings`);
+  }
+  return v as string[];
+}
+
+function optFinite(obj: Record<string, unknown>, field: string, where: string): number | undefined {
+  const v = obj[field];
+  if (v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
+    throw new Error(
+      `invalid config: ${where}.${field} must be a positive finite number`,
+    );
+  }
+  return v;
+}
+
+function optFiniteOrNull(obj: Record<string, unknown>, field: string, where: string): number | null | undefined {
+  const v = obj[field];
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  return optFinite(obj, field, where);
+}
+
+function decodePrice(raw: unknown, where: string): Price {
+  if (!isRecord(raw)) {
+    throw new Error(`invalid config: ${where}.price must be an object`);
+  }
+  const out: Price = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  };
+  for (const k of Object.keys(out) as (keyof Price)[]) {
+    const v = raw[k];
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0) {
+      throw new Error(
+        `invalid config: ${where}.price.${k} must be a non-negative finite number`,
+      );
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+function decodeModelEntry(raw: unknown, id: string, where: string): ModelEntry {
+  if (!isRecord(raw)) {
+    throw new Error(`invalid config: ${where}["${id}"] must be an object`);
+  }
+  return {
+    label: str(raw, "label", `${where}["${id}"]`),
+    family: str(raw, "family", `${where}["${id}"]`),
+    price: decodePrice(raw.price, `${where}["${id}"]`),
+  };
+}
+
+function decodeModels(raw: unknown, where: string): Record<string, ModelEntry> {
+  if (!isRecord(raw)) {
+    throw new Error(`invalid config: ${where} must be an object`);
+  }
+  const out: Record<string, ModelEntry> = {};
+  for (const [id, entry] of Object.entries(raw)) {
+    out[id] = decodeModelEntry(entry, id, where);
+  }
+  return out;
+}
+
+function decodeHostProfile(raw: unknown): HostProfile {
+  if (raw === null || raw === undefined) return {};
+  if (!isRecord(raw)) {
+    throw new Error("invalid config: host profile must be an object");
+  }
+  const profile: HostProfile = {};
+  const dflt = optStr(raw, "default", "host-profile");
+  if (dflt !== undefined) profile.default = dflt;
+  const models = raw.models;
+  if (models !== undefined) profile.models = decodeModels(models, "host-profile.models");
+  const deny = optStrArray(raw, "requiredDeny", "host-profile");
+  if (deny !== undefined) profile.requiredDeny = deny;
+  const preamble = optStr(raw, "promptPreamble", "host-profile");
+  if (preamble !== undefined) profile.promptPreamble = preamble;
+  const verify = optStrArray(raw, "verifyCommands", "host-profile");
+  if (verify !== undefined) profile.verifyCommands = verify;
+  const gate = optStr(raw, "gate", "host-profile");
+  if (gate !== undefined) profile.gate = gate;
+  const deadline = optFinite(raw, "deadlineMs", "host-profile");
+  if (deadline !== undefined) profile.deadlineMs = deadline;
+  const idle = optFiniteOrNull(raw, "idleMs", "host-profile");
+  if (idle !== undefined) profile.idleMs = idle;
+  const toolIdle = optFiniteOrNull(raw, "toolIdleMs", "host-profile");
+  if (toolIdle !== undefined) profile.toolIdleMs = toolIdle;
+  return profile;
+}
+
 export function defaultHostProfilePath(): string {
   return join(homedir(), ".config", "cursor-delegate", "host-profile.json");
 }
@@ -39,11 +165,6 @@ export interface LoadConfigOpts {
   modelsPath: string;
   hostProfilePath?: string;
   readFile?: ReadFileFn;
-}
-
-interface ModelsFile {
-  default: string;
-  models: Record<string, ModelEntry>;
 }
 
 function toPriceMap(models: Record<string, ModelEntry>): PriceMap {
@@ -68,17 +189,18 @@ export async function loadConfig(opts: LoadConfigOpts): Promise<Config> {
     defaultHostProfilePath();
 
   const [fileRaw, profileRaw] = await Promise.all([
-    readJson<ModelsFile>(readFile, opts.modelsPath),
-    readJson<HostProfile>(readFile, profilePath),
+    readJson<unknown>(readFile, opts.modelsPath),
+    readJson<unknown>(readFile, profilePath),
   ]);
 
-  if (!fileRaw || !fileRaw.models || typeof fileRaw.default !== "string") {
+  if (!isRecord(fileRaw) || typeof fileRaw.default !== "string") {
     throw new Error(`invalid or missing models file: ${opts.modelsPath}`);
   }
+  const fileModels = decodeModels(fileRaw.models, "models.json.models");
+  const profile = decodeHostProfile(profileRaw);
 
-  const profile: HostProfile = profileRaw ?? {};
   const models: Record<string, ModelEntry> = {
-    ...fileRaw.models,
+    ...fileModels,
     ...(profile.models ?? {}),
   };
   const defaultModel = profile.default ?? fileRaw.default;
@@ -102,5 +224,25 @@ export async function loadCliConfig(
   path: string,
   readFile: ReadFileFn = defaultReadFile,
 ): Promise<CliConfig | null> {
-  return readJson<CliConfig>(readFile, path);
+  const raw = await readJson<unknown>(readFile, path);
+  if (raw === null) return null;
+  if (!isRecord(raw)) {
+    throw new Error(`invalid config: ${path} must be an object`);
+  }
+  const perms = raw.permissions;
+  if (perms !== undefined) {
+    if (!isRecord(perms)) {
+      throw new Error(`invalid config: ${path}.permissions must be an object`);
+    }
+    const deny = perms.deny;
+    if (
+      deny !== undefined &&
+      (!Array.isArray(deny) || deny.some((x) => typeof x !== "string"))
+    ) {
+      throw new Error(
+        `invalid config: ${path}.permissions.deny must be an array of strings`,
+      );
+    }
+  }
+  return raw as CliConfig;
 }

@@ -109,15 +109,8 @@ export async function handleCall(
         deps,
         { sink, signal },
       );
-    case "doctor": {
-      if (args?.deep !== undefined && typeof args.deep !== "boolean") {
-        throw new Error(`invalid field "deep" (expected boolean)`);
-      }
-      return runDoctor({
-        config: deps.config,
-        deep: args?.deep === true,
-      });
-    }
+    case "doctor":
+      return runDoctor({ config: deps.config });
     default:
       throw new Error(`unknown tool "${name}"`);
   }

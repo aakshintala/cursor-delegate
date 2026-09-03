@@ -71,7 +71,7 @@ test("buildTools wires cursor_run description with blurb and default", () => {
   );
 });
 
-test("doctor tool schema has optional reserved deep flag and no required fields", () => {
+test("doctor tool schema takes no input", () => {
   const tools = buildTools(config);
   const doctor = tools.find((t) => t.name === "doctor");
   assert.ok(doctor);
@@ -79,10 +79,10 @@ test("doctor tool schema has optional reserved deep flag and no required fields"
   assert.match(doctor!.description, /model menu|models\.json/i);
   assert.match(doctor!.description, /warning/i);
   const schema = doctor!.inputSchema as {
-    properties: { deep?: { type: string } };
+    properties: Record<string, unknown>;
     required?: string[];
   };
-  assert.equal(schema.properties.deep?.type, "boolean");
+  assert.deepEqual(schema.properties, {});
   assert.ok(!schema.required || schema.required.length === 0);
 });
 

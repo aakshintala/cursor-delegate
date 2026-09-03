@@ -220,17 +220,8 @@ export function buildTools(config: Pick<Config, "default" | "models">) {
         "account login via `cursor-agent about` (email, subscription, current model), and " +
         "model-menu drift (config/models.json ids vs `cursor-agent models` / `--list-models`). " +
         "Configured ids missing from the account list are WARNINGS, not failures. " +
-        "Prices are not checkable via the CLI. Optional `deep` is reserved and currently ignored.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          deep: {
-            type: "boolean",
-            description:
-              "Reserved for future deep diagnostics. Currently ignored.",
-          },
-        },
-      },
+        "Prices are not checkable via the CLI.",
+      inputSchema: { type: "object", properties: {} },
     },
   ];
 }

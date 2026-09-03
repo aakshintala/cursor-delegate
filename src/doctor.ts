@@ -358,12 +358,9 @@ export interface RunDoctorOpts {
   runCommand?: RunAgentCommandFn;
   readPackageVersion?: ReadPackageVersionFn;
   checkPluginRegistration?: () => Promise<PluginRegistrationCheck>;
-  /** Reserved; currently ignored. */
-  deep?: boolean;
 }
 
 export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorReport> {
-  void opts.deep; // reserved
   const resolveBin = opts.resolveBin ?? resolveCursorBin;
   const binExists = opts.binExists ?? ((p: string) => existsSync(p));
   const runCommand = opts.runCommand ?? defaultRunAgentCommand;

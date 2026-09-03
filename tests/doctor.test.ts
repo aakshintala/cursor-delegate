@@ -896,10 +896,9 @@ test("runDoctor treats model-list command failure as warning not failure", async
   assert.ok(report.warnings.some((w) => /model/i.test(w)));
 });
 
-test("runDoctor accepts deep and ignores it", async () => {
+test("runDoctor runs without deep flag", async () => {
   const report = await runDoctor({
     config: { models: { "composer-2.5": modelsConfig.models["composer-2.5"] } },
-    deep: true,
     resolveBin: () => "/fake/cursor-agent",
     binExists: () => true,
     readPackageVersion: async () => "0.1.0",

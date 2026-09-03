@@ -166,14 +166,6 @@ test("cursor_answer returns NOT_FOUND for unknown jobId", async () => {
   assert.deepEqual(calls, ["lookupAnswer:missing"]);
 });
 
-test("doctor rejects non-boolean deep", async () => {
-  const { deps: d } = deps();
-  await assert.rejects(
-    () => handleCall("doctor", { deep: "yes" }, d),
-    /deep/,
-  );
-});
-
 test("doctor returns a DoctorReport shaped object without requiring args", async () => {
   const { deps: d } = deps();
   // Force a missing binary so runDoctor does not exec the real CLI.

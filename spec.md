@@ -700,9 +700,9 @@ spec/quality reviewers** (different allow-list engines from the implementer, `re
 true`). Plan-writing uses `grok-4.5-xhigh` with `ask`/`plan`. Reproduce this as documentation, not
 logic.
 
-`skills/delegate/SKILL.md` (+ `reference.md`) is the orchestration playbook: when to
-delegate, model picks, the plan / `NEEDS_CONTEXT` / `cursor_answer` resume flow, and the plan-writer
-brief template. Ship it with the plugin; it is not executed by the server.
+`skills/delegate/SKILL.md` is the single live orchestration document (catalog table,
+model picks, waiting patterns, resume flow, plan-writer brief template); the former
+`config/agents/catalog.md` and `skills/delegate/reference.md` were folded into it.
 
 ---
 

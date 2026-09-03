@@ -79,5 +79,5 @@ npm run build    # tsc -> dist/
 | `~/.config/cursor-delegate/host-profile.json` | overrides + policy; may merge `default` / `models` and set `requiredDeny`, `gate`, deadlines (override path via `$CURSOR_DELEGATE_HOST_PROFILE`) |
 | `~/.cursor/cli-config.json` | Cursor's own `permissions.deny` — checked before every run (all caps carry `--force`) |
 
-See [`config/agents/catalog.md`](./config/agents/catalog.md) for the reusable "agent" convention
-tuples over `cursor_run`.
+See [`skills/delegate/SKILL.md`](./skills/delegate/SKILL.md) for the reusable "agent" convention
+tuples over `cursor_run` (catalog table).

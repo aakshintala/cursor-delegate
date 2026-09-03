@@ -119,7 +119,7 @@ export async function handleCall(
 /** Wire an MCP Server around the deps (no transport connected). */
 export function createServer(deps: ServerDeps): Server {
   const server = new Server(
-    { name: "cursor-delegate", version: "0.3.0" },
+    { name: "cursor-delegate", version: "0.4.0" },
     { capabilities: { tools: {} } },
   );
 

@@ -108,6 +108,58 @@ test("allowPartialCommit suppresses the incomplete-commit concern", async () => 
   assert.equal(out.concerns, undefined);
 });
 
+test("gate failure on ERROR stays ERROR (only clean DONE downgrades)", async () => {
+  const out = await finalizeRun(
+    { raw: { result: "" }, cleanExit: false, stderr: "boom" },
+    baseCtx({
+      gate: "make test",
+      runGate: async () => ({
+        command: "make test",
+        exitCode: 1,
+        passed: false,
+        outputTail: "FAIL",
+      }),
+    }),
+  );
+  assert.equal(out.status, "ERROR");
+});
+
+test("gate failure leaves NEEDS_CONTEXT parked, not downgraded", async () => {
+  const out = await finalizeRun(
+    { raw: { result: "q?\nSTATUS: NEEDS_CONTEXT", is_error: false }, cleanExit: true, stderr: "" },
+    baseCtx({
+      gate: "make test",
+      runGate: async () => ({
+        command: "make test",
+        exitCode: 1,
+        passed: false,
+        outputTail: "FAIL",
+      }),
+    }),
+  );
+  assert.equal(out.status, "NEEDS_CONTEXT");
+});
+
+test("read-only runs never raise the incomplete-commit concern", async () => {
+  const out = await finalizeRun(
+    okResult,
+    baseCtx({ isWrite: false, headBefore: "aaa", gitDelta: async () => dirtyCommitted }),
+  );
+  assert.equal(out.status, "DONE");
+  assert.equal(out.concerns, undefined);
+  assert.deepEqual(out.changeSet, dirtyCommitted);
+});
+
+test("write with commits but a clean tree raises no concern", async () => {
+  const clean: ChangeSet = { ...dirtyCommitted, uncommittedFiles: [], dirtyAfter: false };
+  const out = await finalizeRun(
+    okResult,
+    baseCtx({ isWrite: true, headBefore: "aaa", gitDelta: async () => clean }),
+  );
+  assert.equal(out.status, "DONE");
+  assert.equal(out.concerns, undefined);
+});
+
 test("jobId and downgraded flags propagate", async () => {
   const out = await finalizeRun(
     okResult,
@@ -158,4 +210,31 @@ test("finalizeStall never raises the incomplete-commit concern", async () => {
 test("finalizeStall carries stderrTail when the child wrote to stderr", async () => {
   const out = await finalizeStall({ ...stalledResult, stderr: "boom" }, baseCtx());
   assert.equal(out.stderrTail, "boom");
+});
+
+test("finalizeStall attaches jobId/downgraded", async () => {
+  const out = await finalizeStall(
+    stalledResult,
+    baseCtx({ jobId: "job-9", downgraded: true }),
+  );
+  assert.equal(out.jobId, "job-9");
+  assert.equal(out.downgraded, true);
+});
+
+test("finalizeStall resolves the worktree cwd for the change-set", async () => {
+  let seenCwd = "";
+  const out = await finalizeStall(
+    stalledResult,
+    baseCtx({
+      cwd: "/repo",
+      worktreeName: "wt-side",
+      resolveWorktreePath: async () => "/repo/wt-side",
+      gitDelta: async (cwd) => {
+        seenCwd = cwd;
+        return dirtyCommitted;
+      },
+    }),
+  );
+  assert.equal(seenCwd, "/repo/wt-side");
+  assert.deepEqual(out.changeSet, dirtyCommitted);
 });

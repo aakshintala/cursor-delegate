@@ -25,6 +25,20 @@ test("parsePorcelain strips the XY prefix and handles renames", () => {
   assert.deepEqual(parsePorcelain("R  old.txt -> new.txt"), ["new.txt"]);
 });
 
+test("parsePorcelain matrix: status codes, quoted paths, renames", () => {
+  assert.deepEqual(parsePorcelain('A  added.ts'), ["added.ts"]);
+  assert.deepEqual(parsePorcelain(' D deleted.ts'), ["deleted.ts"]);
+  assert.deepEqual(parsePorcelain('UU conflicted.ts'), ["conflicted.ts"]);
+  assert.deepEqual(parsePorcelain('!! ignored.ts'), ["ignored.ts"]);
+  // quoted paths (spaces / non-ASCII) are unquoted
+  assert.deepEqual(parsePorcelain('?? "my file.txt"'), ["my file.txt"]);
+  assert.deepEqual(parsePorcelain(' M "dir/a b.ts"'), ["dir/a b.ts"]);
+  // quoted rename keeps the new path
+  assert.deepEqual(parsePorcelain('R  "old name" -> "new name"'), ["new name"]);
+  // multi-line output
+  assert.deepEqual(parsePorcelain(" M a.ts\n?? b.txt\n"), ["a.ts", "b.txt"]);
+});
+
 test("gitDelta returns null outside a repo", async () => {
   const dir = mkdtempSync(join(tmpdir(), "cd-nogit-"));
   try {
@@ -74,6 +88,19 @@ test("resolveWorktreePath finds a named worktree", async () => {
     assert.ok(resolved);
     assert.ok(resolved!.endsWith("/wt-side"));
     assert.equal(await resolveWorktreePath(dir, "missing"), null);
+    // bare-suffix over-match: a sibling dir ending in the name must not match
+    execFileSync(
+      "git",
+      ["-C", dir, "worktree", "add", "-q", join(dir, "my-wt-side"), "-b", "wt2"],
+      { stdio: "pipe" },
+    );
+    try {
+      assert.equal(await resolveWorktreePath(dir, "y-wt-side"), null);
+    } finally {
+      execFileSync("git", ["-C", dir, "worktree", "remove", "-f", join(dir, "my-wt-side")], {
+        stdio: "pipe",
+      });
+    }
   } finally {
     execFileSync("git", ["-C", dir, "worktree", "remove", "-f", wtDir], {
       stdio: "pipe",

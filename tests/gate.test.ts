@@ -21,3 +21,17 @@ test("never throws, even for a nonsense command", async () => {
   assert.equal(r.passed, false);
   assert.notEqual(r.exitCode, 0);
 });
+
+test("never throws for an unresolvable cwd", async () => {
+  const r = await runGate("true", "/no/such/dir-xyz");
+  assert.equal(r.passed, false);
+  assert.notEqual(r.exitCode, 0);
+});
+
+test("outputTail is capped at the last 2048 bytes", async () => {
+  const r = await runGate("seq 1 2000", process.cwd());
+  assert.equal(r.passed, true);
+  assert.equal(r.command, "seq 1 2000");
+  assert.ok(Buffer.byteLength(r.outputTail, "utf8") <= 2048);
+  assert.match(r.outputTail, /2000/);
+});

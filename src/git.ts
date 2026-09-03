@@ -77,10 +77,7 @@ export async function resolveWorktreePath(
 
   if (name) {
     const match = worktrees.find(
-      (wt) =>
-        wt === name ||
-        wt.endsWith(`/${name}`) ||
-        wt.endsWith(name),
+      (wt) => wt === name || wt.endsWith(`/${name}`),
     );
     return match ?? null;
   }

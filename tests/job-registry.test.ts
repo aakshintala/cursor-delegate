@@ -72,6 +72,9 @@ test("heartbeat refreshes the RUNNING record every 30s and stops at retirement",
   await flush();
   assert.equal(writes.length, 2);
   assert.equal(writes[1].record.status, "RUNNING");
+  // Disk record and cursor_poll are the same shape by construction: every write is
+  // poll(jobId) verbatim. This assert pins that so they can't drift apart.
+  assert.deepEqual(writes[1].record, registry.poll(writes[1].jobId));
   if (writes[1].record.status === "RUNNING") {
     assert.equal(writes[1].record.lastHeartbeatAt, 30_000);
   }

@@ -2,7 +2,7 @@
 # cursor-delegate setup: build the server and install the plugin with Claude Code at user scope.
 # Portable across Linux/macOS. Pure JS build (tsc), no native deps.
 #
-#   DRY_RUN=1 ./bin/setup.sh   # preview without making changes
+#   DRY_RUN=1 ./bin/setup.sh   # preview the commands without making changes
 set -euo pipefail
 
 NAME="cursor-delegate"
@@ -11,11 +11,12 @@ PLUGIN="${NAME}@${MARKETPLACE}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN="${DRY_RUN:-0}"
 
+# Execute args directly (no eval): quoting is preserved and arguments are never re-parsed.
 run() {
   if [ "$DRY_RUN" = "1" ]; then
     echo "DRY_RUN: $*"
   else
-    eval "$@"
+    "$@"
   fi
 }
 
@@ -32,15 +33,22 @@ if ! command -v cursor-agent >/dev/null 2>&1; then
   echo "WARNING: cursor-agent not on PATH. Install it and run 'cursor-agent login' before using write tools." >&2
 fi
 
-# 3. Build.
-run "cd '$REPO_ROOT' && npm install && npm run build"
+# 3. Build. (DRY_RUN prints the shell line instead of executing it.)
+BUILD_CMD="cd $(printf %q "$REPO_ROOT") && npm install && npm run build"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "DRY_RUN: bash -c \"$BUILD_CMD\""
+else
+  bash -c "$BUILD_CMD"
+fi
 
 # 4. Scaffold a minimal host-profile ONLY if absent (never overwrite).
+#    Defaults mirror the server's built-in policy (src/index.ts): idleMs 300000,
+#    toolIdleMs 1800000.
 PROFILE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cursor-delegate"
 PROFILE="$PROFILE_DIR/host-profile.json"
 if [ ! -f "$PROFILE" ]; then
   echo "Scaffolding minimal host profile at $PROFILE"
-  run "mkdir -p '$PROFILE_DIR'"
+  run mkdir -p "$PROFILE_DIR"
   if [ "$DRY_RUN" != "1" ]; then
     # Optional overrides (all keys optional): set "default" / "models" to extend or
     # override the bundled config/models.json allow-list; the rest are host policy.
@@ -51,7 +59,8 @@ if [ ! -f "$PROFILE" ]; then
   "verifyCommands": [],
   "gate": "",
   "deadlineMs": 60000,
-  "idleMs": 180000
+  "idleMs": 300000,
+  "toolIdleMs": 1800000
 }
 JSON
   fi
@@ -61,9 +70,21 @@ fi
 
 # 5. Install plugin at user scope (idempotent: marketplace add + plugin install).
 if command -v claude >/dev/null 2>&1; then
-  run "claude plugin marketplace add '$REPO_ROOT' --scope user"
-  run "claude plugin install '$PLUGIN' --scope user"
-  echo "Installed '$PLUGIN' with Claude Code (user scope)."
+  run claude plugin marketplace add "$REPO_ROOT" --scope user
+  run claude plugin install "$PLUGIN" --scope user
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "DRY_RUN: skipped install of '$PLUGIN'."
+  else
+    echo "Installed '$PLUGIN' with Claude Code (user scope)."
+  fi
+  # 6. Verify the marketplace actually registered.
+  if [ "$DRY_RUN" != "1" ]; then
+    if claude plugin marketplace list 2>/dev/null | grep -q "$MARKETPLACE"; then
+      echo "Verified: marketplace '$MARKETPLACE' is registered."
+    else
+      echo "WARNING: could not confirm marketplace '$MARKETPLACE' registration. Check 'claude plugin marketplace list'." >&2
+    fi
+  fi
 else
   echo "NOTE: 'claude' CLI not found. Install manually from $REPO_ROOT:"
   echo "  claude plugin marketplace add ./ --scope user"

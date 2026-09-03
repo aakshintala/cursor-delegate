@@ -48,15 +48,17 @@ const config: Config = {
   },
 };
 
-function fakeRegistry(): { registry: JobRegistry; last: () => JobSpec } {
+function fakeRegistry(): { registry: JobRegistry; last: () => JobSpec; calls: () => number } {
   let captured: JobSpec | undefined;
+  let n = 0;
   const registry = {
     dispatch: async (spec: JobSpec): Promise<DispatchResult> => {
       captured = spec;
+      n++;
       return { status: "RUNNING", jobId: "j1" };
     },
   } as unknown as JobRegistry;
-  return { registry, last: () => captured! };
+  return { registry, last: () => captured!, calls: () => n };
 }
 
 function depsWith(registry: JobRegistry, cliDeny: string[] | null): RunnerDeps {
@@ -142,11 +144,12 @@ test("a write with a satisfied deny-list proceeds", async () => {
 });
 
 test("a write with a missing deny pattern throws before dispatch", async () => {
-  const { registry } = fakeRegistry();
+  const { registry, calls } = fakeRegistry();
   await assert.rejects(
     () => runDelegation({ prompt: "edit", capability: "write" }, depsWith(registry, [])),
     DenyListError,
   );
+  assert.equal(calls(), 0); // gate fires before spawn — no child was created
 });
 
 test("a read-only ask with a missing deny pattern throws before dispatch", async () => {
@@ -165,6 +168,56 @@ test("a read-only plan with a missing deny pattern throws before dispatch", asyn
     () => runDelegation({ prompt: "plan it", capability: "plan" }, depsWith(registry, [])),
     DenyListError,
   );
+});
+
+test("write-unsandboxed without the second signal downgrades to sandboxed write", async () => {
+  const { registry, last } = fakeRegistry();
+  await runDelegation(
+    { prompt: "edit", capability: "write-unsandboxed" },
+    depsWith(registry, ["rm -rf /"]),
+  );
+  const spec = last();
+  assert.equal(spec.downgraded, true);
+  assert.ok(spec.argv.includes("enabled")); // --sandbox enabled, not disabled
+  assert.ok(!spec.argv.includes("disabled"));
+  assert.equal(spec.isWrite, true);
+  assert.equal(spec.resumeContext.capability, "write-unsandboxed");
+  assert.equal(spec.resumeContext.allowUnsandboxed, false);
+});
+
+test("write-unsandboxed with allowUnsandboxed keeps the disabled sandbox", async () => {
+  const { registry, last } = fakeRegistry();
+  await runDelegation(
+    { prompt: "edit", capability: "write-unsandboxed", allowUnsandboxed: true },
+    depsWith(registry, ["rm -rf /"]),
+  );
+  const spec = last();
+  assert.equal(spec.downgraded, false);
+  assert.ok(spec.argv.includes("disabled"));
+  assert.equal(spec.resumeContext.allowUnsandboxed, true);
+});
+
+test("a foreground NEEDS_CONTEXT result keeps its jobId so it is answerable", async () => {
+  // The registry returns the terminal output directly on the foreground path;
+  // the runner must pass it through untouched (jobId present -> cursor_answer works).
+  const terminal = {
+    status: "NEEDS_CONTEXT",
+    text: "which version?\nSTATUS: NEEDS_CONTEXT",
+    sessionId: "sess-1",
+    backend: "cursor",
+    model: "composer-2.5",
+    usage: null,
+    costUsd: null,
+    costEstimated: true,
+    durationMs: 1,
+    jobId: "j-fg",
+  } as const;
+  const registry = {
+    dispatch: async () => terminal,
+  } as unknown as JobRegistry;
+  const res = await runDelegation({ prompt: "do it" }, depsWith(registry, ["rm -rf /"]));
+  assert.deepEqual(res, terminal);
+  assert.equal((res as { jobId?: string }).jobId, "j-fg");
 });
 
 test("requireNonClaude + a Claude model throws", async () => {

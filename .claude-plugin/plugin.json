@@ -1,6 +1,6 @@
 {
   "name": "cursor-delegate",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Delegate coding/research tasks to Cursor's models via the local cursor-agent CLI, with a curated model allow-list, sandboxing, an async job model, needs-input resume, and ground-truth git verification.",
   "author": { "name": "Amogh Akshintala", "email": "amogh.akshintala@databricks.com" },
   "skills": ["./skills/delegate"]

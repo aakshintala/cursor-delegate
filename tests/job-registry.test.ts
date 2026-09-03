@@ -709,6 +709,36 @@ test("lookupAnswer rejects jobs that are not awaiting an answer", async () => {
   });
 });
 
+test("completed LRU evicts past 100 jobs; evicted ids read NOT_FOUND", async () => {
+  const { registry, handles } = setup();
+  const ids: string[] = [];
+  for (let i = 0; i < 101; i++) {
+    const r = await registry.dispatch(specOf({ background: true }));
+    ids.push(jobId(r));
+  }
+  assert.equal(new Set(ids).size, 101); // UUID ids are unique
+  for (const h of handles) h.finish(doneOk);
+  await flush();
+  await flush();
+  assert.equal(registry.poll(ids[0]).status, "NOT_FOUND");
+  assert.equal(registry.poll(ids[100]).status, "DONE");
+});
+
+test("detaching a write returns busyPath naming the locked tree", async () => {
+  const { registry, clock } = setup();
+  const p = registry.dispatch(specOf({ isWrite: true, path: "/repo" }));
+  await clock.advance(1000); // blow the deadline -> detach
+  const detached = await p;
+  assert.equal(detached.status, "RUNNING");
+  assert.equal((detached as { busyPath?: string }).busyPath, "/repo");
+
+  const bg = await registry.dispatch(
+    specOf({ isWrite: true, path: "/other", background: true }),
+  );
+  assert.equal(bg.status, "RUNNING");
+  assert.equal((bg as { busyPath?: string }).busyPath, "/other");
+});
+
 test("lookupAnswer rejects NEEDS_CONTEXT jobs that lack a sessionId", async () => {
   const { registry, handles } = setup();
   const p = registry.dispatch(specOf());

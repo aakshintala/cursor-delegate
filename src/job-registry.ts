@@ -348,10 +348,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
 
     // background -> detach immediately, dropping the caller sink.
     if (spec.background) {
-      return Promise.resolve({
-        status: "RUNNING" as const,
-        jobId,
-      });
+      return Promise.resolve(detachResult(spec, jobId));
     }
 
     if (opts.sink) job.sinks.add(opts.sink);
@@ -362,11 +359,16 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     return raceDeadline(job, deadline, opts.signal).then((winner) => {
       if (opts.sink) job.sinks.delete(opts.sink);
       if (winner.kind === "done") return winner.out;
-      return {
-        status: "RUNNING" as const,
-        jobId,
-      };
+      return detachResult(spec, jobId);
     });
+  }
+
+  // Detach shape (§4.1/§6.2): a write names the locked tree so the caller knows
+  // which path is held, even though the job itself is running normally.
+  function detachResult(spec: JobSpec, jobId: string): DispatchResult {
+    return spec.isWrite && spec.path
+      ? { status: "RUNNING" as const, jobId, busyPath: spec.path }
+      : { status: "RUNNING" as const, jobId };
   }
 
   type RaceWinner = { kind: "done"; out: RunOutput } | { kind: "other" };

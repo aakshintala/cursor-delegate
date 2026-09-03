@@ -25,6 +25,7 @@ test("shell tool_call sets lastTool", () => {
     s,
   );
   assert.equal(s.lastTool, "shell");
+  assert.equal(s.phase, "running_tool");
 });
 
 test("edit tool_call records the touched path", () => {
@@ -76,6 +77,13 @@ test("mcp tool_call uses toolName, falls back to mcp", () => {
     s,
   );
   assert.equal(s.lastTool, "search");
+
+  const s2 = initStreamState();
+  parseLine(
+    JSON.stringify({ type: "tool_call", subtype: "started", tool_call: { mcpToolCall: {} } }),
+    s2,
+  );
+  assert.equal(s2.lastTool, "mcp");
 });
 
 test("non-started tool_call does not update lastTool", () => {
@@ -102,6 +110,7 @@ test("assistant text is concatenated and truncated to 200 chars", () => {
     s,
   );
   assert.equal(s.lastAssistant?.length, 200);
+  assert.equal(s.phase, "responding");
 });
 
 test("thinking delta sets the phase", () => {

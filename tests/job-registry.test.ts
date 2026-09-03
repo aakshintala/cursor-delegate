@@ -794,3 +794,51 @@ test("cancel during finalizing aborts the finalize stage instead of waiting fore
   await registry.cancel(result.jobId);
   assert.equal(registry.poll(result.jobId).status, "CANCELLED");
 });
+
+test("a parked NEEDS_CONTEXT job survives 100 unrelated completions (answerable retention)", async () => {
+  const { registry, handles } = setup();
+  const parked = await registry.dispatch(specOf({ background: true }));
+  handles[0].finish({
+    ...doneOk,
+    raw: {
+      result: "what port?\nSTATUS: NEEDS_CONTEXT",
+      is_error: false,
+      session_id: "s-1",
+    },
+    cleanExit: true,
+  });
+  await flush();
+
+  for (let i = 0; i < 100; i++) {
+    const h = await registry.dispatch(specOf({ background: true }));
+    void h;
+    handles[i + 1].finish(doneOk);
+    await flush();
+  }
+
+  assert.equal(registry.poll(parked.jobId!).status, "NEEDS_CONTEXT");
+  const looked = registry.lookupAnswer(parked.jobId!);
+  assert.equal(looked.ok, true);
+});
+
+test("an answerable job expires after the retention TTL", async () => {
+  const { registry, handles, clock } = setup();
+  const parked = await registry.dispatch(specOf({ background: true }));
+  handles[0].finish({
+    ...doneOk,
+    raw: {
+      result: "what port?\nSTATUS: NEEDS_CONTEXT",
+      is_error: false,
+      session_id: "s-2",
+    },
+    cleanExit: true,
+  });
+  await flush();
+  assert.equal(registry.lookupAnswer(parked.jobId!).ok, true);
+
+  clock.advance(24 * 60 * 60 * 1000 + 1);
+  assert.deepEqual(registry.lookupAnswer(parked.jobId!), {
+    ok: false,
+    error: "NOT_FOUND",
+  });
+});

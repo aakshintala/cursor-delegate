@@ -25,6 +25,12 @@ export type { StatusRecordWriter } from "./status-record.js";
 export { fileStatusRecordWriter } from "./status-record.js";
 
 const COMPLETED_CAP = 100;
+/**
+ * Answerable retention (#3): a parked NEEDS_CONTEXT job must not become unanswerable
+ * just because 100 unrelated jobs completed. Terminal-but-not-answerable jobs evict
+ * by LRU; answerable ones are kept until this TTL expires, then lazily dropped.
+ */
+const ANSWERABLE_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WAIT_TIMEOUT = 120000;
 /** How often a RUNNING job's status record is refreshed on disk. */
 const HEARTBEAT_MS = 30_000;
@@ -63,6 +69,8 @@ interface Job {
   idleTimer: TimerHandle | null;
   heartbeatTimer: TimerHandle | null;
   supersededBy: string | null;
+  /** Clock time the job entered the completed map (for answerable-TTL eviction). */
+  retiredAt: number | null;
   completion: Promise<RunOutput>;
   terminalOutput: RunOutput | null;
   sinks: Set<ProgressSink>;
@@ -171,6 +179,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
     job.stage = "terminal";
     job.finalizeAbort = null;
     job.terminalOutput = out;
+    job.retiredAt = clock.now();
     job.child = null;
     active.delete(job.id);
     if (
@@ -181,10 +190,13 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       pathLock.delete(job.spec.path);
     }
     completed.set(job.id, job);
-    while (completed.size > COMPLETED_CAP) {
-      const oldest = completed.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      completed.delete(oldest);
+    const answerable = (j: Job) =>
+      j.status === "NEEDS_CONTEXT" && !!j.terminalOutput?.sessionId;
+    for (const [id, oldest] of completed) {
+      if (completed.size <= COMPLETED_CAP) break;
+      // Answerable jobs outlive the LRU cap (up to the TTL); everything else evicts oldest-first.
+      if (answerable(oldest)) continue;
+      completed.delete(id);
     }
     statusWriter.write(job.id, poll(job.id));
   }
@@ -220,6 +232,7 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
       idleTimer: null,
       heartbeatTimer: null,
       supersededBy: null,
+      retiredAt: null,
       completion: Promise.resolve(null as unknown as RunOutput), // replaced below
       terminalOutput: null,
       sinks: new Set(),
@@ -450,7 +463,17 @@ export function makeJobRegistry(deps: RegistryDeps): JobRegistry {
   }
 
   function lookupAnswer(jobId: string): AnswerLookup {
-    const job = getJob(jobId);
+    let job = getJob(jobId);
+    if (
+      job &&
+      job.status === "NEEDS_CONTEXT" &&
+      job.retiredAt !== null &&
+      clock.now() - job.retiredAt > ANSWERABLE_TTL_MS
+    ) {
+      // Answerable retention expired (#3): behave exactly as if evicted.
+      completed.delete(jobId);
+      job = undefined;
+    }
     if (!job) return { ok: false, error: "NOT_FOUND" };
     const sessionId = job.terminalOutput?.sessionId ?? null;
     if (job.status !== "NEEDS_CONTEXT" || !sessionId) {

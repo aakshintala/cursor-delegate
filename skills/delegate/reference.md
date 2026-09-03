@@ -297,12 +297,14 @@ often `/tmp`. Resolve at runtime with `echo "${TMPDIR:-/tmp}/cursor-delegate-job
 
 The file contains exactly what `cursor_poll` would return at that moment:
 
-- While running: `{ "status": "RUNNING", "progress": { ... } }`
+- While running: `{ "status": "RUNNING", "lastHeartbeatAt": <server ms>, "progress": { ... } }`
 - When done: `{ "status": "<terminal>", "result": <RunOutput> }` — full terminal payload,
   not just a status label.
 
-The server writes at job start and again at the terminal transition only (not on every
-progress tick).
+The server writes at job start, then **refreshes the record every 30s while running**
+(heartbeat), and once more at the terminal transition. `lastHeartbeatAt` is the server clock
+at the last refresh: if it stops advancing while the record still says `RUNNING`, the server
+died mid-job — treat the job as lost and redispatch rather than waiting forever.
 
 #### Host dependency: `jq`
 
@@ -379,6 +381,11 @@ finished, but **this wait is**. Inspect the printed JSON; if `status` is `NEEDS_
 follow up with `cursor_answer` exactly as for blocking `cursor_wait` (see
 [Needs-input resume flow](./SKILL.md#needs-input-resume-flow) in `SKILL.md`), then wait again
 if the answer resumes a still-running job.
+
+After `cursor_answer` resumes the run under a new jobId, the parked record gains
+`"supersededBy": "<newJobId>"` — a forward pointer, not a status change. If you were waiting
+on the original id, follow the chain: wait on the new id's record instead (and note that the
+original record stays `NEEDS_CONTEXT` forever; only its `supersededBy` field moves).
 
 #### When to use which
 

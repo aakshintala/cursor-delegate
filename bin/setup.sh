@@ -68,6 +68,34 @@ else
   echo "Host profile already exists at $PROFILE (leaving untouched)."
 fi
 
+# 4b. Scaffold the plugin's MCP-server declaration ONLY if absent (never overwrite).
+#     `.mcp.json` is intentionally gitignored: it is host-local, and committing it would make
+#     Claude Code ALSO auto-load it as a project-scoped MCP server whenever cwd is inside the
+#     repo (double registration). But that means a fresh checkout has none, and `claude plugin
+#     install` below would snapshot a plugin with no MCP server (skill loads, tools silently
+#     disconnect). Write it here, before the install, so every installed host has it.
+#     ${CLAUDE_PLUGIN_ROOT} is resolved by Claude Code at load time to the installed snapshot.
+MCP_JSON="$REPO_ROOT/.mcp.json"
+if [ ! -f "$MCP_JSON" ]; then
+  echo "Scaffolding plugin MCP declaration at $MCP_JSON"
+  if [ "$DRY_RUN" != "1" ]; then
+    cat > "$MCP_JSON" <<'JSON'
+{
+  "mcpServers": {
+    "cursor-delegate": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"],
+      "timeout": 600000
+    }
+  }
+}
+JSON
+  fi
+else
+  echo "Plugin MCP declaration already exists at $MCP_JSON (leaving untouched)."
+fi
+
 # 5. Install plugin at user scope (idempotent: marketplace add + plugin install).
 if command -v claude >/dev/null 2>&1; then
   run claude plugin marketplace add "$REPO_ROOT" --scope user

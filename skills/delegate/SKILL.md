@@ -36,6 +36,12 @@ Do **not** delegate when you still need to invent the product decision yourself,
 when the user must stay in the loop on every edit, or when the only available
 models would review with the same id that produced the artifact.
 
+**Size is not a reason to skip the delegate.** Once a session is set up to
+implement through `cursor_run`, a three-line edit goes through it too. The round
+trip is not what you are buying — the `gate` is, and a hand edit skips it. A
+change that feels too trivial to brief means the brief will be short, not that
+the delegate should be skipped.
+
 ## Model picks
 
 Allow-list ids only (server rejects anything else): `composer-2.5`,
@@ -94,13 +100,37 @@ Common additions:
 - `capability`: `ask` | `plan` | `write` | `write-unsandboxed`
 - `isolation`: `{ "type": "CallerProvided", "path": "<abs working tree>" }` for writes
 - `verifyCommands`: string[] — only verify commands the agent may run
-- `gate`: postcondition **you** (the tool) enforce after the agent
+- `gate`: postcondition **you** (the tool) enforce after the agent — a shell
+  command, see [Writing a gate](#writing-a-gate)
 - `requireNonClaude`: `true` for reviewer roles
 - `background`: `true` to fan out; then wait for completion (see below)
 
 Always end delegated prompts with an instruction to finish with a trailing
 `STATUS: DONE` | `BLOCKED` | `NEEDS_CONTEXT` line (the server also injects a
 status-convention block; reinforce it in plan-writer briefs).
+
+## Writing a gate
+
+`gate` is a **shell command string**, executed verbatim by `/bin/sh -c`. An
+English postcondition ("the test output contains no failure line") makes `sh` die
+on a syntax error: the job returns `DONE_WITH_CONCERNS` with
+`gateResult.passed: false`, and nothing was checked. The brief still *looks*
+gated. Put the prose version in the prompt body and keep `gate` runnable:
+
+```
+cargo fmt --check && cargo clippy -- -D warnings && cargo test
+```
+
+Add an explicit `grep` wherever a tool's exit code is known to lie about failure.
+
+**Read `gateResult` in the job record, not the top-level status**, and re-run the
+verification yourself whenever `passed` is false.
+
+**Write the gate as the next consumer's first action, not as an existence
+check.** "The artifact was produced" and "the artifact works" come apart exactly
+where permissions, encodings and platforms differ, which is where the bugs are.
+If a packer feeds a runner, the gate runs the runner. If a generator feeds a
+parser, the gate parses. A gate that greps for a file is not a gate.
 
 ## Waiting on jobs
 
@@ -267,6 +297,27 @@ via `cursor_answer`. The return shape matches `cursor_run` (may be terminal,
 Reliability caveat: detection depends on the model emitting `STATUS: NEEDS_CONTEXT`.
 If a weak model skips the line and guesses, your review of the artifact is the
 backstop — especially for delegated plans.
+
+## Briefing and trusting the delegate
+
+**Verify your own brief before sending it.** Reviewing the returned diff does not
+catch an error you authored: the diff matches the brief, so it reads correct. For
+any claim of the form "every caller passes X" or "the remaining value is Y", run
+the search and read the surviving branch before writing it into the brief. Where
+a conditional is resolved at build or compile time, check which branch
+*production* takes rather than which looks like the default.
+
+**Ask the delegate to verify stated premises** rather than take them on trust. A
+brief that says "confirm this before acting on it" turns your own error into a
+report instead of a silent wrong change.
+
+**When a delegate's report contradicts a premise you supplied, believe the
+delegate first.** Before overriding its judgement — or attributing a change to it
+— get evidence. Reading the diff is not evidence, and neither is the fact that a
+delegate happened to be running. Search for the symbol's callers outside the file
+before disputing a retention: a stale-sounding name often means a rename is owed,
+not a deletion. For a file that vanished, `git log --diff-filter=D` and the
+delegate's own reported file list are evidence; concurrency is not. Ask.
 
 ## Driving use case: delegated plan-writing
 

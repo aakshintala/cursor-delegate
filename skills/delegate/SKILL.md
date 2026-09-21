@@ -81,7 +81,7 @@ Notes:
 - Always pass `verifyCommands` to bound what an implementer may run, and a `gate` to enforce
   the postcondition the tool itself checks.
 - Plan-writing (not a named row above) uses `cursor-grok-4.6-xhigh` with `capability` `ask`
-  or `plan`; see [Plan-writer brief](#plan-writer-brief) below.
+  or `plan`; see [`plan-writer-brief.md`](./plan-writer-brief.md).
 
 ## Calling `cursor_run`
 
@@ -134,143 +134,65 @@ parser, the gate parses. A gate that greps for a file is not a gate.
 
 ## Waiting on jobs
 
-### Blocking wait tools (short jobs)
+**Under a minute:** block the turn with `cursor_wait` (one job), `cursor_wait_any`
+(first of several) or `cursor_wait_all` (all of several). Each takes `timeoutMs`
+(default 120000, clamped `[1000, 600000]`) and returns the current `RUNNING`
+snapshot on timeout rather than hanging.
 
-For jobs expected to finish **well under a minute**, block the current turn with the MCP wait
-tools — simpler than the file-watch pattern below:
+**Longer:** do not hold the turn inside `cursor_wait*`. Watch the status record
+the server writes to disk, from a background shell, so the turn can end and one
+notification arrives when the job or batch is done.
 
-| Tool | Use when |
-|------|----------|
-| `cursor_wait` | One job; block until it is terminal (or timeout). |
-| `cursor_wait_any` | Several jobs; block until the **first** reaches a terminal state. |
-| `cursor_wait_all` | Several jobs; block until **all** are terminal. |
+### The status record
 
-Each accepts optional `timeoutMs` (default 120000, clamp `[1000, 600000]`). On timeout they
-return the current `RUNNING` snapshot rather than hanging forever.
+Every dispatched job gets one JSON file at
+`join(os.tmpdir(), "cursor-delegate-jobs", "<jobId>.json")` — resolve it as
+`${TMPDIR:-/tmp}/cursor-delegate-jobs/${JOB_ID}.json`.
 
-If the returned status is `NEEDS_CONTEXT`, the `result` carries `jobId` and the delegate's
-question in `result.text`. Answer via `cursor_answer` (see
-[Needs-input resume flow](#needs-input-resume-flow)) and continue until a fully terminal status.
+It holds exactly what `cursor_poll` would return: `{"status": "RUNNING",
+"lastHeartbeatAt": <server ms>, "progress": {...}}` while running, and
+`{"status": "<terminal>", "result": <RunOutput>}` when done — the full payload,
+not a status label.
 
-### Non-blocking wait pattern (long jobs)
+The server writes at start, refreshes every 30s while running, and writes once
+more at the terminal transition. **If `lastHeartbeatAt` stops advancing while the
+record still says `RUNNING`, the server died mid-job**: redispatch rather than
+wait.
 
-For jobs expected to run **longer than about a minute**, do not hold the orchestrating turn
-inside `cursor_wait*`. Instead, watch the **status record** the server writes to disk and
-run the poll loop in a **background shell** so this turn can end and you are notified once
-when the job (or batch) is done.
+### The watcher
 
-#### Status record — location and shape
-
-Every dispatched job gets one JSON file:
-
-```
-join(os.tmpdir(), "cursor-delegate-jobs", `${jobId}.json`)
-```
-
-On macOS `os.tmpdir()` is usually `$TMPDIR` (under `/var/folders/.../T/`); on Linux it is
-often `/tmp`. Resolve at runtime with `echo "${TMPDIR:-/tmp}/cursor-delegate-jobs/${JOB_ID}.json"` or `node -e "console.log(require('node:path').join(require('node:os').tmpdir(), 'cursor-delegate-jobs', process.argv[1] + '.json'))" "$JOB_ID"`.
-
-The file contains exactly what `cursor_poll` would return at that moment:
-
-- While running: `{ "status": "RUNNING", "lastHeartbeatAt": <server ms>, "progress": { ... } }`
-- When done: `{ "status": "<terminal>", "result": <RunOutput> }` — full terminal payload,
-  not just a status label.
-
-The server writes at job start, then **refreshes the record every 30s while running**
-(heartbeat), and once more at the terminal transition. `lastHeartbeatAt` is the server clock
-at the last refresh: if it stops advancing while the record still says `RUNNING`, the server
-died mid-job — treat the job as lost and redispatch rather than waiting forever.
-
-#### Host dependency: `jq`
-
-The examples below use `jq` to test `.status`. It is the one new host dependency this
-pattern assumes. Check before running verbatim:
+One bounded loop handles one job or many — the `timeout` is what stops a missing
+or never-written record hanging forever. `jq` is the one host dependency.
 
 ```bash
-command -v jq >/dev/null || { echo "jq is required for the status-record wait pattern" >&2; exit 1; }
-```
-
-#### Single-job pattern
-
-After `cursor_run` with `background: true`, note the returned `jobId`, set `STATUS_FILE` to
-its record path, then launch a **bounded** background wait (missing or never-written files
-must not hang forever — the outer `timeout` enforces that):
-
-```bash
-JOB_ID="<from cursor_run>"
-STATUS_FILE="${TMPDIR:-/tmp}/cursor-delegate-jobs/${JOB_ID}.json"
-
-command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
-
-timeout 300 bash -c 'until jq -e ".status != \"RUNNING\"" "$1" >/dev/null 2>&1; do sleep 2; done; cat "$1"' _ "$STATUS_FILE"
-```
-
-In Claude Code, invoke that shell with the **Bash** tool and `run_in_background: true` so
-this turn is not blocked for the full job duration. When the background command completes,
-read its stdout — that is the terminal `PollResult` JSON.
-
-#### Batch variant
-
-Same pattern over **N** job ids: the `until` loop requires **every** record to be non-`RUNNING`
-before exiting, then prints all terminal records (one notification for the whole batch):
-
-```bash
-JOB_IDS=( "<id-a>" "<id-b>" )   # one entry per background cursor_run
-FILES=()
-for id in "${JOB_IDS[@]}"; do
-  FILES+=( "${TMPDIR:-/tmp}/cursor-delegate-jobs/${id}.json" )
-done
+JOB_IDS=( "<id-a>" )   # one entry per background cursor_run
+FILES=(); for id in "${JOB_IDS[@]}"; do FILES+=( "${TMPDIR:-/tmp}/cursor-delegate-jobs/${id}.json" ); done
 
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
 
 timeout 300 bash -c '
   FILES=("$@")
-  until
-    all=true
-    for f in "${FILES[@]}"; do
-      if ! jq -e ".status != \"RUNNING\"" "$f" >/dev/null 2>&1; then
-        all=false
-        break
-      fi
-    done
-    $all
-  do
-    sleep 2
-  done
-  for f in "${FILES[@]}"; do
-    echo "=== $f ==="
-    cat "$f"
-    echo
-  done
+  until all=true; for f in "${FILES[@]}"; do
+           jq -e ".status != \"RUNNING\"" "$f" >/dev/null 2>&1 || { all=false; break; }
+         done; $all
+  do sleep 2; done
+  for f in "${FILES[@]}"; do echo "=== $f ==="; cat "$f"; echo; done
 ' _ "${FILES[@]}"
 ```
 
-Launch with Bash `run_in_background: true` as above.
+In Claude Code, run that with the **Bash** tool and `run_in_background: true`.
+Its stdout is the terminal `PollResult` JSON for every job.
 
-#### `NEEDS_CONTEXT` is terminal for this wait
+### `NEEDS_CONTEXT` ends the wait, not the job
 
-When the delegate parks for input, the status record leaves `RUNNING` with
-`status: "NEEDS_CONTEXT"` and the full `result` (including `jobId` and the question in
-`result.text`). The background wait **exits and prints that record** — the job itself is not
-finished, but **this wait is**. Inspect the printed JSON; if `status` is `NEEDS_CONTEXT`,
-follow up with `cursor_answer` exactly as for blocking `cursor_wait` (see
-[Needs-input resume flow](#needs-input-resume-flow)), then wait again
-if the answer resumes a still-running job.
+When a delegate parks for input the record leaves `RUNNING` with
+`status: "NEEDS_CONTEXT"` and the full `result`, so the watcher exits and prints
+it. Answer via [`cursor_answer`](#needs-input-resume-flow), then wait again on the
+resumed job.
 
-After `cursor_answer` resumes the run under a new jobId, the parked record gains
-`"supersededBy": "<newJobId>"` — a forward pointer, not a status change. If you were waiting
-on the original id, follow the chain: wait on the new id's record instead (and note that the
-original record stays `NEEDS_CONTEXT` forever; only its `supersededBy` field moves).
-
-#### When to use which
-
-| Expected duration | Approach |
-|-------------------|----------|
-| Well under a minute | `cursor_wait` / `cursor_wait_any` / `cursor_wait_all` (blocking) |
-| Longer runs | Status-record background shell (non-blocking) |
-
-Blocking tools remain correct and preferred for short work; the file-watch pattern exists so
-the orchestrating turn is not tied up for the entire delegate runtime.
+`cursor_answer` resumes under a **new jobId** and stamps the parked record with
+`"supersededBy": "<newJobId>"` — a forward pointer, not a status change. The
+original record stays `NEEDS_CONTEXT` forever; follow the chain to the new id.
 
 ## Needs-input resume flow
 
@@ -322,266 +244,14 @@ delegate's own reported file list are evidence; concurrency is not. Ask.
 ## Driving use case: delegated plan-writing
 
 1. You hold the approved spec (brainstorm done).
-2. Build the prompt from the **PLAN-WRITER BRIEF TEMPLATE**
-   [below](#plan-writer-brief-template) — fill every placeholder; do not send an
-   empty template.
-3. `cursor_run` with `model: "cursor-grok-4.6-xhigh"`, `capability: "ask"` or `"plan"`
-   (read-only plan authoring; use `write` only if the plan must be written into the
-   repo by the delegate).
-4. On `NEEDS_CONTEXT`, answer via `cursor_answer` and continue until `DONE` /
-   `DONE_WITH_CONCERNS` / `BLOCKED` / `ERROR`.
-5. Review the plan yourself. For a second opinion, run a Verifier or Design-critic
-   catalog role on a **different** model with `requireNonClaude: true`.
-
-## Plan-writer brief
-
-Before any plan-writing `cursor_run`, read and apply the template below
-(PLAN-WRITER BRIEF TEMPLATE + example filled brief).
-
-### PLAN-WRITER BRIEF TEMPLATE
-
-Copy everything inside the fence into `cursor_run.prompt` after replacing
-placeholders (`«...»`). Do not leave placeholders unfilled. Use
-`model: "cursor-grok-4.6-xhigh"` unless the user explicitly overrides with another
-allow-list id.
-
-```text
-You are a plan-writing delegate. The orchestrator (a different model) already
-brainstormed and approved the design. Your job is to write ONE detailed
-implementation plan markdown file — planning document only.
-
-## Hard rules
-
-- Do NOT implement code. Do NOT modify source. Do NOT run build/test commands
-  except read-only inspection needed to name exact paths (`ls`, `rg`, `Read`).
-- Do NOT commit. Do NOT create git commits or PRs.
-- Your only deliverable is the plan content (and, if the orchestrator asked you
-  to write a file, that single markdown path).
-- If you lack a fact that blocks a correct plan (missing path, unclear API,
-  ambiguous requirement), stop and ask. End your message with the question as
-  the body and a trailing line exactly:
-
-  STATUS: NEEDS_CONTEXT
-
-  The orchestrator will answer via cursor_answer and you will resume. Do not
-  guess through blockers.
-- When the plan is complete, end with:
-
-  STATUS: DONE
-
-## Output path
-
-Write the plan to: «PLAN_OUTPUT_PATH»
-(Example: docs/superpowers/plans/YYYY-MM-DD-«feature-slug».md)
-
-## Plan document header (required)
-
-Start the plan with this header shape (fill Goal / Architecture / Tech Stack):
-
-# «Feature Name» Implementation Plan
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** «one sentence»
-
-**Architecture:** «2-3 sentences»
-
-**Tech Stack:** «key technologies»
-
-## Global Constraints
-
-«Copy project-wide rules from the spec verbatim — one line each.»
-
-## Spec / context (authoritative)
-
-«PASTE_APPROVED_SPEC_OR_SUMMARY»
-
-## Assumed already true
-
-«LIST_DEPENDENCIES_ALREADY_SHIPPED — do not re-plan these»
-
-## Out of scope
-
-«LIST_EXCLUSIONS»
-
-## File structure (target)
-
-| Path | Role |
-|------|------|
-| «path» | «responsibility» |
-
-## Methodology for THIS plan
-
-«If the subsystem is runtime code: use TDD — failing test → run fail → minimal impl → run pass → commit.»
-«If the subsystem is documentation-only: replace unit-test steps with VERIFICATION steps (file existence, rg/grep assertions with expected output). Still use bite-sized `- [ ]` steps and commit after each task.»
-
-## Task structure (every task)
-
-### Task N: «name»
-
-**Files:**
-- Create: `«exact/path»`
-- Modify: `«exact/path»`
-- Test or Verify: `«exact/path-or-command»`
-
-**Interfaces:**
-- Consumes: «exact names from earlier tasks»
-- Produces: «exact names later tasks rely on»
-
-Then bite-sized steps:
-
-- [ ] **Step …:** show the ACTUAL content to write (full markdown/code — no TBD)
-- [ ] **Step …:** run the exact verification/test command; state Expected: …
-- [ ] **Step …:** Commit with an exact `git add` + `git commit -m "..."` block
-
-## No placeholders in the plan you write
-
-Never leave "TBD", "TODO", "similar to Task N", or "add appropriate error handling"
-without the real content. Every step must be executable by an engineer with zero
-repo context.
-
-## Self-Review (end of your plan)
-
-After writing all tasks, include a `## Self-Review` section that checks:
-
-1. Spec coverage vs «SPEC_PATH_OR_SECTION_LIST»
-2. Placeholder scan (no TBD/TODO/similar-to-N)
-3. Consistency of names/paths/model ids across tasks
-4. «EXTRA_REVIEW_CHECKS»
-
-## Tool surface you may reference (do not re-implement)
-
-«DOCUMENT_ASSUMED_APIS — e.g. cursor_run model allow-list, requireNonClaude, cursor_answer, NEEDS_CONTEXT»
-
-Begin now. Read only what you need to name exact paths, then write the full plan.
-```
-
-### Example: filled brief (driving use case)
-
-Orchestrator has an approved design at
-`docs/superpowers/specs/2026-07-09-cursor-delegate-model-layer-design.md` §8
-and wants Grok to author the skill+catalog plan. Filled prompt body (abbreviated
-placeholders shown filled):
-
-```text
-You are a plan-writing delegate. The orchestrator (a different model) already
-brainstormed and approved the design. Your job is to write ONE detailed
-implementation plan markdown file — planning document only.
-
-## Hard rules
-
-- Do NOT implement code. Do NOT modify source. Do NOT run build/test commands
-  except read-only inspection needed to name exact paths (`ls`, `rg`, `Read`).
-- Do NOT commit. Do NOT create git commits or PRs.
-- Your only deliverable is the plan content (and, if the orchestrator asked you
-  to write a file, that single markdown path).
-- If you lack a fact that blocks a correct plan (missing path, unclear API,
-  ambiguous requirement), stop and ask. End your message with the question as
-  the body and a trailing line exactly:
-
-  STATUS: NEEDS_CONTEXT
-
-  The orchestrator will answer via cursor_answer and you will resume. Do not
-  guess through blockers.
-- When the plan is complete, end with:
-
-  STATUS: DONE
-
-## Output path
-
-Write the plan to: docs/superpowers/plans/2026-07-09-delegate-skill.md
-
-## Plan document header (required)
-
-Start the plan with this header shape (fill Goal / Architecture / Tech Stack):
-
-# Delegate Skill & Catalog Implementation Plan
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** Ship a Claude Code delegate skill and rewrite config/agents/catalog.md around model + requireNonClaude.
-
-**Architecture:** Documentation-only skill + catalog; verification via rg/file checks.
-
-**Tech Stack:** Claude Code plugin skills, markdown catalog, existing MCP tools.
-
-## Global Constraints
-
-- Scope only design-spec §8 (skill + catalog). Model layer, needs-input, and doctor are already implemented — document them, do not build them.
-- Allow-list ids: composer-2.5, cursor-grok-4.6-xhigh, cursor-grok-4.6-high, cursor-grok-4.5-high, gemini-3.5-flash, gpt-5.6-sol-high, gpt-5.6-terra-high.
-- Model picks: composer-2.5 bulk; cursor-grok-4.6-xhigh plan-writing/coding; gemini-3.5-flash / gpt-5.6-sol-high / gpt-5.6-terra-high diverse review with requireNonClaude: true.
-- Catalog: map roles to model + requireNonClaude columns; keep governing principle.
-- No unit tests; use verification steps. Commit after each task.
-
-## Spec / context (authoritative)
-
-Paste §1 (driving use case) and §8 from
-docs/superpowers/specs/2026-07-09-cursor-delegate-model-layer-design.md, plus
-current config/agents/catalog.md and plugin/plugin.json layout notes.
-
-## Assumed already true
-
-- Model allow-list + requireNonClaude on cursor_run
-- cursor_answer(jobId, answer) + NEEDS_CONTEXT parked jobs with uniform jobId
-
-## Out of scope
-
-- Implementing src/* model resolver, doctor tool, or needs-input runtime
-
-## File structure (target)
-
-| Path | Role |
-|------|------|
-| skills/delegate/SKILL.md | Orchestration playbook (single live doc) |
-| config/agents/catalog.md | Roles → model + requireNonClaude |
-
-## Methodology for THIS plan
-
-Documentation-only: verification steps (file existence, rg/grep), not unit tests.
-
-## Task structure (every task)
-
-(Use the Task N shape from the template. Show full markdown to write in each step.)
-
-## No placeholders in the plan you write
-
-Never leave TBD / TODO / similar-to-N.
-
-## Self-Review (end of your plan)
-
-1. Spec coverage vs §8
-2. Placeholder scan
-3. Catalog model ids match the allow-list
-4. Model ids match the allow-list
-
-## Tool surface you may reference (do not re-implement)
-
-cursor_run(model, requireNonClaude, …); cursor_answer(jobId, answer);
-NEEDS_CONTEXT parked job always carries jobId.
-
-Begin now. Read only what you need to name exact paths, then write the full plan.
-```
-
-### Example `cursor_run` wrapper
-
-```json
-{
-  "model": "cursor-grok-4.6-xhigh",
-  "capability": "ask",
-  "prompt": "<paste filled PLAN-WRITER BRIEF TEMPLATE here>"
-}
-```
-
-If the result is `NEEDS_CONTEXT`, call:
-
-```json
-{
-  "jobId": "<parked job id>",
-  "answer": "<orchestrator answer>"
-}
-```
-
-on `cursor_answer`, then continue until terminal status.
+2. Read [`plan-writer-brief.md`](./plan-writer-brief.md) and fill every
+   placeholder. Never send an unfilled template.
+3. `cursor_run` with `model: "cursor-grok-4.6-xhigh"` and `capability: "ask"` or
+   `"plan"`. Use `write` only when the delegate must land the plan in the repo.
+4. On `NEEDS_CONTEXT`, answer via `cursor_answer` and continue to a terminal
+   status.
+5. Review the plan yourself, then run a Verifier or Design-critic on a different
+   model with `requireNonClaude: true`.
 
 ## Review after plan-writing
 

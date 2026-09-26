@@ -141,13 +141,20 @@ pub fn default_run_agent_command(bin: &str, args: &[String]) -> AgentCommandResu
         }
     };
     let pid = child.id() as i32;
+    // Once the child is reaped its PID can be reused, so the timer must not fire after that.
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let timer_done = std::sync::Arc::clone(&done);
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(15_000));
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
+        if !timer_done.load(std::sync::atomic::Ordering::SeqCst) {
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
         }
     });
-    match child.wait_with_output() {
+    let output = child.wait_with_output();
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    match output {
         Ok(out) => {
             let mut stdout = out.stdout;
             let mut stderr = out.stderr;

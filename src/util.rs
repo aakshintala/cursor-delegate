@@ -23,6 +23,16 @@ pub fn js_num_opt<S: serde::Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, 
     }
 }
 
+/// Deserialize a field as `None` when it has the wrong shape, rather than failing the whole struct.
+pub fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let v = <serde_json::Value as serde::Deserialize>::deserialize(d)?;
+    Ok(serde_json::from_value(v).ok())
+}
+
 pub fn tail(s: &str, max_bytes: usize) -> String {
     let buf = s.as_bytes();
     if buf.len() <= max_bytes {

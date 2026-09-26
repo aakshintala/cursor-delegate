@@ -630,14 +630,13 @@ impl JobRegistry {
         o: WaitOpts<'_>,
     ) -> WaitAnyResult {
         let timeout = ms(clamp_wait(timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT)));
+        // Earliest to retire, not first in `ids`: two jobs can finish before the waiter wakes.
         let first_done = |st: &State| {
             ids.iter()
-                .find(|id| {
-                    st.jobs
-                        .get(*id)
-                        .is_some_and(|j| j.status != JobStatus::Running)
-                })
-                .cloned()
+                .filter_map(|id| st.jobs.get(id).map(|j| (id, j)))
+                .filter(|(_, j)| j.status != JobStatus::Running)
+                .min_by_key(|(_, j)| j.retired_at)
+                .map(|(id, _)| id.clone())
         };
         let st = self.block(ids, timeout, o, true, |st| {
             // Only known jobs count; with none running there is nothing to wait for.

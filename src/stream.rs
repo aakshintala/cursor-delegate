@@ -337,4 +337,22 @@ mod tests {
         );
         assert_eq!(s.tokens_so_far, 10.0);
     }
+
+    #[test]
+    fn malformed_usage_keeps_the_rest_of_the_result() {
+        let mut s = init_stream_state();
+        let r = parse_line(
+            &json!({
+                "type":"result","is_error":false,"result":"final","session_id":"sid",
+                "usage":{"outputTokens":"7"}
+            })
+            .to_string(),
+            &mut s,
+        );
+        let raw = r.result.unwrap();
+        assert_eq!(raw.result.as_deref(), Some("final"));
+        assert_eq!(raw.session_id.as_deref(), Some("sid"));
+        assert_eq!(raw.is_error, Some(false));
+        assert!(raw.usage.is_none());
+    }
 }

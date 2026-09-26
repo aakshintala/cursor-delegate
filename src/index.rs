@@ -310,7 +310,10 @@ fn handle_request(sess: &Session, msg: &Value) {
                     Err(e) => rpc_error(Some(&id), -32603, &e),
                 };
                 inflight.lock().unwrap().remove(&id_key(&id));
-                out.send(&reply);
+                // A cancelled request gets no reply: the client has already dropped its id.
+                if !flag.load(Ordering::SeqCst) {
+                    out.send(&reply);
+                }
             });
         }
         "" => {

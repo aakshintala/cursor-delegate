@@ -177,25 +177,62 @@ pub struct RunOutput {
     pub concerns: Option<Vec<String>>,
 }
 
+/// Each field decodes on its own: one malformed field reads as absent instead of voiding the rest.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RawCursorJson {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub r#type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub subtype: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub is_error: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub duration_ms: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub duration_api_ms: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub result: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub request_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::util::lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub usage: Option<Usage>,
 }
 

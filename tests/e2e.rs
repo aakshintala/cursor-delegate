@@ -117,6 +117,51 @@ fn run_completes_and_cancel_kills_a_hung_agent() {
 }
 
 #[test]
+fn cancelled_request_gets_no_reply() {
+    let dir = scratch("cancel-reply");
+    let mut s = Server::start(&dir);
+    let bg = s.tool(1, "cursor_run", json!({"prompt":"HANG","background":true}));
+    let job = bg["jobId"].as_str().unwrap();
+
+    writeln!(
+        s.stdin,
+        "{}",
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+        "params":{"name":"cursor_wait","arguments":{"jobId":job,"timeoutMs":60000}}})
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    writeln!(
+        s.stdin,
+        "{}",
+        json!({"jsonrpc":"2.0","method":"notifications/cancelled",
+        "params":{"requestId":2}})
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    // The ping reply comes back; nothing for id 2 precedes it.
+    writeln!(
+        s.stdin,
+        "{}",
+        json!({"jsonrpc":"2.0","id":3,"method":"ping"})
+    )
+    .unwrap();
+    loop {
+        let mut line = String::new();
+        s.stdout.read_line(&mut line).unwrap();
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert_ne!(v["id"], 2, "reply sent for a cancelled request: {v}");
+        if v["id"] == 3 {
+            break;
+        }
+    }
+    s.tool(4, "cursor_cancel", json!({"jobId": job}));
+    drop(s.stdin);
+    s.child.wait().unwrap();
+}
+
+#[test]
 fn sigterm_to_the_server_kills_running_agents() {
     let dir = scratch("shutdown");
     let mut s = Server::start(&dir);

@@ -10,14 +10,12 @@ fn git(cwd: &str, args: &[&str]) -> Option<String> {
         .args(args)
         .output()
         .ok()?;
-    if !out.status.success() {
+    // Oversized output is a failure, not a truncated (and so wrong) change-set.
+    // ponytail: the whole output is buffered before this check; stream it if huge repos spike RSS.
+    if !out.status.success() || out.stdout.len() > MAX_BUFFER {
         return None;
     }
-    let mut stdout = out.stdout;
-    if stdout.len() > MAX_BUFFER {
-        stdout.truncate(MAX_BUFFER);
-    }
-    Some(String::from_utf8_lossy(&stdout).into_owned())
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 pub fn capture_head(cwd: &str, r#ref: Option<&str>) -> Option<String> {

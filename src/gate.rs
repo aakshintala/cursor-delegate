@@ -13,6 +13,9 @@ const KEEP: usize = 2048;
 /// making cancel/shutdown unable to finish the job.
 pub const DEFAULT_GATE_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 
+/// How long a SIGTERMed gate gets to exit before SIGKILL.
+const KILL_GRACE: Duration = Duration::from_secs(2);
+
 pub struct GateOpts<'a> {
     pub timeout_ms: Option<u64>,
     pub signal: Option<&'a Abort>,
@@ -67,7 +70,7 @@ pub fn run_gate(command: &str, cwd: &str, opts: GateOpts<'_>) -> GateResult {
     let (status, killed, out, err) = std::thread::scope(|s| {
         let out = s.spawn(|| read_tail(stdout));
         let err = s.spawn(|| read_tail(stderr));
-        let mut killed = false;
+        let mut termed_at: Option<Instant> = None;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(st)) => break Some(st),
@@ -75,12 +78,20 @@ pub fn run_gate(command: &str, cwd: &str, opts: GateOpts<'_>) -> GateResult {
                 Err(_) => break None,
             }
             let aborted = opts.signal.is_some_and(|a| a.load(Ordering::SeqCst));
-            if !killed && (aborted || start.elapsed() >= timeout) {
-                killed = true;
-                unsafe { libc::kill(-pgid, libc::SIGTERM) };
+            match termed_at {
+                None if aborted || start.elapsed() >= timeout => {
+                    termed_at = Some(Instant::now());
+                    unsafe { libc::kill(-pgid, libc::SIGTERM) };
+                }
+                // A gate that traps SIGTERM would otherwise hold finalize and the path lock forever.
+                Some(t) if t.elapsed() >= KILL_GRACE => unsafe {
+                    libc::kill(-pgid, libc::SIGKILL);
+                },
+                _ => {}
             }
             std::thread::sleep(Duration::from_millis(20));
         };
+        let killed = termed_at.is_some();
         if killed {
             // The shell is gone; take down anything it left holding the pipes.
             unsafe { libc::kill(-pgid, libc::SIGKILL) };
@@ -202,6 +213,25 @@ mod tests {
         assert!(start.elapsed().as_millis() < 5000);
         assert!(!r.passed);
         assert!(r.error.unwrap_or_default().contains("timeout or abort"));
+    }
+
+    #[test]
+    fn gate_ignoring_sigterm_is_sigkilled() {
+        let start = Instant::now();
+        let r = run_gate(
+            "trap '' TERM; sleep 30",
+            &std::env::current_dir().unwrap().to_string_lossy(),
+            GateOpts {
+                timeout_ms: Some(200),
+                signal: None,
+            },
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            start.elapsed()
+        );
+        assert!(!r.passed);
     }
 
     #[test]

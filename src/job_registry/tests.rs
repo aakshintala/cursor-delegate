@@ -790,6 +790,21 @@ fn wait_any_returns_on_the_first_terminal_job() {
 }
 
 #[test]
+fn wait_any_reports_the_job_that_finished_first_not_the_first_listed() {
+    let s = setup();
+    let a = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts::default()));
+    let b = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts::default()));
+    s.fake.handle(1).finish(done_ok());
+    sleep(Duration::from_millis(50));
+    s.fake.handle(0).finish(done_ok());
+    sleep(Duration::from_millis(50));
+    let res = s
+        .reg
+        .wait_any(&[a.clone(), b.clone()], Some(10_000.0), WaitOpts::default());
+    assert_eq!(res.first_done.as_deref(), Some(b.as_str()));
+}
+
+#[test]
 fn wait_all_returns_when_all_known_jobs_are_terminal() {
     let s = setup();
     let a = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts::default()));

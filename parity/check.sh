@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Parity + footprint gate: replay requests.jsonl against the release binary,
-# diff replies (sorted by id, serverInfo dropped) with the TS server's golden
-# output, then check idle RSS stays under RSS_MAX_KB.
+# diff replies (sorted by id, serverInfo dropped) with the snapshot in
+# expected.json, then check idle RSS stays under RSS_MAX_KB.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build --release -q

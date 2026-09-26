@@ -23,7 +23,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
     "2024-10-07",
 ];
 const SERVER_NAME: &str = "cursor-delegate";
-const SERVER_VERSION: &str = "0.4.0";
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct ServerDeps {
     pub config: Config,

@@ -1,5 +1,6 @@
-node_modules/
-dist/
+target/
+bin/cursor-delegate-mcp
+parity/actual.json
 *.log
 .DS_Store
 .pi/

@@ -8,7 +8,6 @@ use std::time::Duration;
 const MAX_BUFFER: usize = 2 * 1024 * 1024;
 const PRICES_NOTE: &str =
     "Prices are not checkable via the CLI (about/models/--list-models return ids/labels only).";
-const PACKAGE_JSON: &str = include_str!("../../package.json");
 
 #[derive(Clone, Debug)]
 pub struct AgentCommandResult {
@@ -292,12 +291,7 @@ pub fn probe_model_menu(
 }
 
 pub fn default_read_package_version() -> Result<String, String> {
-    let v: serde_json::Value = serde_json::from_str(PACKAGE_JSON).map_err(|e| e.to_string())?;
-    v.get("version")
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "package.json missing version".into())
+    Ok(env!("CARGO_PKG_VERSION").into())
 }
 
 fn parse_mcp_get(stdout: &str) -> (Option<String>, bool) {

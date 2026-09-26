@@ -3,7 +3,7 @@ use crate::types::{Config, HostProfile, ModelEntry, Price, PriceMap};
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub const BUNDLED_MODELS_JSON: &str = include_str!("../../config/models.json");
+pub const BUNDLED_MODELS_JSON: &str = include_str!("../config/models.json");
 
 pub type ReadFileFn = Box<dyn Fn(&str) -> Result<String, IoErr> + Send + Sync>;
 

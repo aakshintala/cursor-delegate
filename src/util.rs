@@ -2,7 +2,7 @@ use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// Cancellation flag shared between a request and the work it started (the TS AbortSignal).
+/// Cancellation flag shared between a request and the work it started.
 pub type Abort = Arc<AtomicBool>;
 
 /// Serialize an f64 the way `JSON.stringify` does: integral values without a trailing `.0`.

@@ -58,7 +58,7 @@ DRY_RUN=1 ./bin/setup.sh # preview without changes
 Or manually:
 
 ```bash
-npm install && npm run build
+cargo build --release && cp target/release/cursor-delegate-mcp bin/
 claude plugin marketplace add ./ --scope user
 claude plugin install cursor-delegate@cursor-delegate-local --scope user
 ```
@@ -66,9 +66,9 @@ claude plugin install cursor-delegate@cursor-delegate-local --scope user
 ## Develop
 
 ```bash
-npm test         # offline unit tests (fakes for spawn/clock/git/config)
-npm run test:live # opt-in: real cursor-agent (must be installed + logged in)
-npm run build    # tsc -> dist/
+cargo test                                     # unit tests + stdio e2e against a fake cursor-agent
+cargo fmt --check && cargo clippy -- -D warnings
+parity/check.sh                                # reply snapshot + idle RSS gate (needs jq)
 ```
 
 ## Config

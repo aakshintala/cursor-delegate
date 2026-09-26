@@ -1,0 +1,308 @@
+[
+  {
+    "id": 1,
+    "jsonrpc": "2.0",
+    "result": {
+      "capabilities": {
+        "tools": {}
+      },
+      "protocolVersion": "2025-06-18"
+    }
+  },
+  {
+    "id": 2,
+    "jsonrpc": "2.0",
+    "result": {
+      "tools": [
+        {
+          "description": "Delegate a coding/research task to a Cursor model via the local cursor-agent CLI. Fast tasks return a full RunOutput (status, text, usage, cost, git change-set, gate result). Slow tasks detach and return {status:'RUNNING', jobId} to poll/wait on. A write to a locked CallerProvided path returns {status:'BUSY', jobId, busyPath}. Recommended models: composer-2.5 — Composer 2.5 — $0.5/$2.5; cursor-grok-4.5-high — Grok 4.5 — $2/$6; cursor-grok-4.6-high — Grok 4.6 — $2/$6; cursor-grok-4.6-xhigh — Grok 4.6 Extra High — $2/$6; gemini-3.5-flash — Gemini 3.5 Flash — $1.5/$9; gpt-5.6-sol-high — GPT-5.6 Sol High — $5/$30; gpt-5.6-terra-high — GPT-5.6 Terra High — $5/$30. Default model: composer-2.5.",
+          "inputSchema": {
+            "properties": {
+              "allowPartialCommit": {
+                "description": "Suppress the incomplete-commit concern (commits landed but tree still dirty).",
+                "type": "boolean"
+              },
+              "allowUnsandboxed": {
+                "description": "Required second signal to actually run write-unsandboxed.",
+                "type": "boolean"
+              },
+              "background": {
+                "description": "Return {status:'RUNNING', jobId} immediately without blocking.",
+                "type": "boolean"
+              },
+              "capability": {
+                "description": "ask/plan are read-only. write runs sandboxed+non-interactive. write-unsandboxed also needs allowUnsandboxed:true (else it is downgraded to write). Default 'ask'.",
+                "enum": [
+                  "ask",
+                  "plan",
+                  "write",
+                  "write-unsandboxed"
+                ],
+                "type": "string"
+              },
+              "gate": {
+                "description": "A postcondition command the TOOL runs after the agent. A failing gate downgrades DONE to DONE_WITH_CONCERNS.",
+                "type": "string"
+              },
+              "idleMs": {
+                "description": "Override the idle watchdog window applied while NO tool call is in flight (i.e. waiting on the model itself) — a silence here is a real hang signal. null disables it for this job. Defaults to the server profile's idleMs (currently 300000ms / 5min). You usually don't need this: a running tool call uses the separate, wider toolIdleMs window automatically.",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "isolation": {
+                "description": "Where the agent works. {type:'None'} = server cwd; {type:'CallerProvided',path} = a named workspace (participates in the write lock); {type:'BackendProvided',name?,base?} = a cursor worktree.",
+                "oneOf": [
+                  {
+                    "properties": {
+                      "type": {
+                        "const": "None"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "CallerProvided"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "base": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "BackendProvided"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "model": {
+                "description": "Curated model id from the allow-list. Default 'composer-2.5' when omitted.",
+                "enum": [
+                  "composer-2.5",
+                  "cursor-grok-4.5-high",
+                  "cursor-grok-4.6-high",
+                  "cursor-grok-4.6-xhigh",
+                  "gemini-3.5-flash",
+                  "gpt-5.6-sol-high",
+                  "gpt-5.6-terra-high"
+                ],
+                "type": "string"
+              },
+              "prompt": {
+                "description": "The task for the delegated Cursor agent. Required.",
+                "type": "string"
+              },
+              "requireNonClaude": {
+                "description": "When true, hard-reject if the resolved model family is 'claude'. Default false.",
+                "type": "boolean"
+              },
+              "session": {
+                "description": "Resume a prior sessionId for continuity.",
+                "type": "string"
+              },
+              "toolIdleMs": {
+                "description": "Override the idle watchdog window applied while a tool call IS in flight (e.g. a shell command, build, or test suite) — this can legitimately go silent for a long time, so it defaults much wider than idleMs. null disables the watchdog for in-flight tool calls on this job. Defaults to the server profile's toolIdleMs (currently 1800000ms / 30min).",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "verifyCommands": {
+                "description": "The ONLY verification commands the agent may run (injected into the prompt). Overrides the profile default.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "waitMs": {
+                "description": "How long to block before auto-detaching to a jobId. Clamped to [1000, 600000]. Default ~60s.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "prompt"
+            ],
+            "type": "object"
+          },
+          "name": "cursor_run"
+        },
+        {
+          "description": "Non-blocking status check for a jobId. Returns {RUNNING, progress, lastHeartbeatAt, supersededBy?} or {<terminal>, result, supersededBy?} or {NOT_FOUND}. lastHeartbeatAt (server ms) lets you detect a dead server; supersededBy points at the new jobId when a NEEDS_CONTEXT job was resumed.",
+          "inputSchema": {
+            "properties": {
+              "jobId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "jobId"
+            ],
+            "type": "object"
+          },
+          "name": "cursor_poll"
+        },
+        {
+          "description": "SIGTERM the job's child, mark it CANCELLED, and return the resulting poll result.",
+          "inputSchema": {
+            "properties": {
+              "jobId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "jobId"
+            ],
+            "type": "object"
+          },
+          "name": "cursor_cancel"
+        },
+        {
+          "description": "Long-poll: block until the job is terminal or timeoutMs elapses (default 120000, clamp [1000,600000]). On timeout returns the RUNNING snapshot. Works on a BUSY jobId (waits for the lock holder).",
+          "inputSchema": {
+            "properties": {
+              "jobId": {
+                "type": "string"
+              },
+              "timeoutMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "jobId"
+            ],
+            "type": "object"
+          },
+          "name": "cursor_wait"
+        },
+        {
+          "description": "Block until the FIRST listed job is terminal (or timeout). Returns {jobs, firstDone?}. Pairs with background:true for parallel dispatch.",
+          "inputSchema": {
+            "properties": {
+              "jobIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "timeoutMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "jobIds"
+            ],
+            "type": "object"
+          },
+          "name": "cursor_wait_any"
+        },
+        {
+          "description": "Block until ALL listed (known) jobs are terminal (or timeout). Returns {jobs, allDone}. Empty input -> {jobs:{}, allDone:true}.",
+          "inputSchema": {
+            "properties": {
+              "jobIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "timeoutMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "jobIds"
+            ],
+            "type": "object"
+          },
+          "name": "cursor_wait_all"
+        },
+        {
+          "description": "Resume a parked NEEDS_CONTEXT job: look up its sessionId and original run context (isolation, capability, verifyCommands, gate, model), then continue via --resume <sessionId> with `answer` as the prompt. Returns the same shape as cursor_run (terminal, NEEDS_CONTEXT again, or RUNNING/jobId). Unknown/expired jobId → {status:'NOT_FOUND'}; a job not awaiting input is rejected.",
+          "inputSchema": {
+            "properties": {
+              "answer": {
+                "description": "Orchestrator answer to the delegated agent's question (becomes the resume prompt).",
+                "type": "string"
+              },
+              "jobId": {
+                "description": "jobId of a parked run that ended with status NEEDS_CONTEXT.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "jobId",
+              "answer"
+            ],
+            "type": "object"
+          },
+          "name": "cursor_answer"
+        },
+        {
+          "description": "Diagnose cursor-delegate setup: plugin version, cursor-agent binary + --version, account login via `cursor-agent about` (email, subscription, current model), and model-menu drift (config/models.json ids vs `cursor-agent models` / `--list-models`). Configured ids missing from the account list are WARNINGS, not failures. Prices are not checkable via the CLI.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "name": "doctor"
+        }
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "jsonrpc": "2.0",
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"status\": \"NOT_FOUND\"\n}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  {
+    "error": {
+      "code": -32603,
+      "message": "model \"not-a-model\" is not in the allow-list"
+    },
+    "id": 4,
+    "jsonrpc": "2.0"
+  },
+  {
+    "error": {
+      "code": -32603,
+      "message": "unknown tool \"bogus\""
+    },
+    "id": 5,
+    "jsonrpc": "2.0"
+  },
+  {
+    "id": 6,
+    "jsonrpc": "2.0",
+    "result": {}
+  }
+]

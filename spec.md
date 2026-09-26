@@ -2,8 +2,8 @@
 
 A self-contained specification for rebuilding the `cursor-delegate` plugin from scratch. It
 captures *what* the system does and *how* its pieces fit, precisely enough to reimplement in any
-language. The reference implementation is TypeScript/Node on the MCP SDK; where a detail is
-language-specific it is called out as such.
+language. The reference implementation is Rust (std threads, `serde_json`, a hand-rolled MCP stdio
+transport); where a detail is language-specific it is called out as such.
 
 ---
 
@@ -53,40 +53,40 @@ faked in tests.
 MCP client (Claude Code)
    │  stdio (JSON-RPC)
    ▼
-index.ts ............ MCP server: tool list (buildTools), request routing, arg validation,
+index.rs ............ MCP server: tool list (buildTools), request routing, arg validation,
    │                  progress-sink wiring, shutdown handlers
    ▼
-runner.ts ........... runDelegation(): pure pre-flight — resolve model, map capability,
+runner.rs ........... runDelegation(): pure pre-flight — resolve model, map capability,
    │                  verify deny-list, map isolation, compose prompt, capture HEAD,
    │                  build a JobSpec (incl. ResumeContext), hand to the registry
    │                  answerDelegation(): lookupAnswer → re-enter runDelegation with
    │                  --resume <sessionId> and answer as the prompt
    ▼
-job-registry.ts ..... STATEFUL. spawn via backend, deadline-race, detach+jobId,
+job_registry.rs ..... STATEFUL. spawn via backend, deadline-race, detach+jobId,
    │                  progress tracking, idle watchdog, write-path lock, cancel,
    │                  poll/wait/waitAny/waitAll, lookupAnswer, shutdown killAll
-   ├── backends/cursor.ts ... spawn cursor-agent, parse stream-json (NDJSON) lines,
-   │      backends/types.ts    emit "progress"/"stderr" events, resolve a BackendResult
-   │   stream.ts ............. incremental stream-json parser (lastTool, tokens, files, phase)
-   │   cursor-bin.ts ......... resolve the cursor-agent binary path
-   └── finalize.ts ......... assemble terminal RunOutput:
-          output.ts ......... base status/usage/text from the raw result blob
-          gate.ts ........... run the postcondition command (#7)
-          git.ts ............ compute the real change-set (#6)
+   ├── backends/cursor.rs ... spawn cursor-agent, parse stream-json (NDJSON) lines,
+   │      backends/types.rs    emit "progress"/"stderr" events, resolve a BackendResult
+   │   stream.rs ............. incremental stream-json parser (lastTool, tokens, files, phase)
+   │   cursor_bin.rs ......... resolve the cursor-agent binary path
+   └── finalize.rs ......... assemble terminal RunOutput:
+          output.rs ......... base status/usage/text from the raw result blob
+          gate.rs ........... run the postcondition command (#7)
+          git.rs ............ compute the real change-set (#6)
 
-Policy helpers (pure), consumed by runner.ts / index.ts:
-   models.ts ....... model id → ResolvedModel (+ requireNonClaude hard reject)
-   capability.ts ... capability → cursor-agent flags (+ unsandboxed downgrade)
-   isolation.ts .... isolation → {flags, cwd}
-   safety.ts ....... fail-closed deny-list verification
-   prompt.ts ....... preamble + verify-scope + statusBlock + NUL sanitization
-   pricing.ts ...... usage × priceMap → best-effort USD
-   config.ts ....... load models.json + host profile; derive priceMap
-   tool-schemas.ts . buildRecommendedModelsBlurb / buildRunInputSchema / buildTools
-   doctor.ts ....... parseAbout / parseModelsList / probes / runDoctor
-   progress.ts ..... ProgressSink + MCP notifications/progress bridge
-   validate.ts ..... MCP cursor_run args → typed RunInput
-   types.ts ........ all domain types
+Policy helpers (pure), consumed by runner.rs / index.rs:
+   models.rs ....... model id → ResolvedModel (+ requireNonClaude hard reject)
+   capability.rs ... capability → cursor-agent flags (+ unsandboxed downgrade)
+   isolation.rs .... isolation → {flags, cwd}
+   safety.rs ....... fail-closed deny-list verification
+   prompt.rs ....... preamble + verify-scope + statusBlock + NUL sanitization
+   pricing.rs ...... usage × priceMap → best-effort USD
+   config.rs ....... load models.json + host profile; derive priceMap
+   tool_schemas.rs . buildRecommendedModelsBlurb / buildRunInputSchema / buildTools
+   doctor.rs ....... parseAbout / parseModelsList / probes / runDoctor
+   progress.rs ..... ProgressSink + MCP notifications/progress bridge
+   validate.rs ..... MCP cursor_run args → typed RunInput
+   types.rs ........ all domain types
 ```
 
 **Dependency rule:** `runner` and the policy helpers are pure and synchronous-ish (config is async
@@ -496,7 +496,7 @@ prefix), races `completion`(s) vs a timeout vs abort, then returns poll snapshot
 }
 ```
 
-### 7.3 Fail-closed deny-list (`safety.ts`)
+### 7.3 Fail-closed deny-list (`safety.rs`)
 Before **any** delegation (`ask`/`plan`/`write`/`write-unsandboxed`): read
 `~/.cursor/cli-config.json`; if every pattern in `requiredDeny` is **not** present in
 `permissions.deny`, throw `DenyListError` and refuse to run. `requiredDeny: []` → always passes.
@@ -529,7 +529,7 @@ escape hatch).
 
 ## 8. Pure-logic specifications (reimplement these exactly)
 
-### 8.1 Model resolution (`models.ts`)
+### 8.1 Model resolution (`models.rs`)
 `resolveModel({ model, requireNonClaude }, { default, models })`:
 1. `model = model ?? config.default`.
 2. Look up `config.models[model]`; if absent → throw `ModelNotAllowedError`.
@@ -537,7 +537,7 @@ escape hatch).
    (hard reject — covers both an explicit Claude model and a Claude default; no silent swap).
 4. Return `{ model, family: entry.family, price: entry.price }`.
 
-### 8.2 Prompt composition (`prompt.ts`)
+### 8.2 Prompt composition (`prompt.rs`)
 Join, in order, with separator `"\n\n---\n\n"`:
 `[preamble?, verifyBlock(verifyCommands)?, statusBlock(), prompt]`, then strip all NUL bytes
 (`s.replace(/\0/g, "")` — `spawn` throws on a NUL in any argv entry; #1).
@@ -552,17 +552,17 @@ command."* (#5). Per-call `verifyCommands` overrides the profile default; same f
 > need an answer from the orchestrator before you can proceed, put your question in the message body
 > and end with STATUS: NEEDS_CONTEXT.
 
-The question body is the message text itself — no extra payload field. `output.ts` parses the
+The question body is the message text itself — no extra payload field. `output.rs` parses the
 trailing `STATUS:` line into `RunStatus` (including `NEEDS_CONTEXT`).
 
-### 8.3 Status derivation (`output.ts`)
+### 8.3 Status derivation (`output.rs`)
 `text = raw.result ?? ""`. Precedence:
 1. An explicit trailing `STATUS: <X>` line in `text` (last non-empty line matching
    `/^STATUS:\s*([A-Z_]+)\s*$/`, accepted only if `X ∈ RunStatus`).
 2. Else `raw.is_error === false && cleanExit` → `DONE`.
 3. Else `ERROR`.
 
-### 8.4 Finalize pipeline (`finalize.ts`, #3/#6/#7)
+### 8.4 Finalize pipeline (`finalize.rs`, #3/#6/#7)
 Given `BackendResult` + context, build `RunOutput` then layer on:
 1. base via `toRunOutput`; attach `jobId` if present on ctx; attach `downgraded` if set.
 2. **#3** `stderrTail` = last 2048 bytes of stderr, but **only** if `!cleanExit || status==="ERROR"`
@@ -575,13 +575,13 @@ Given `BackendResult` + context, build `RunOutput` then layer on:
    !allowPartialCommit` → push a human-readable concern and downgrade `DONE` →
    `DONE_WITH_CONCERNS` (HEAD may not build).
 
-### 8.5 Gate (`gate.ts`, #7)
+### 8.5 Gate (`gate.rs`, #7)
 Run `command` via `/bin/sh -c` in `cwd`, `maxBuffer` 16 MiB. `passed = exitCode === 0`.
 `outputTail` = last 2048 bytes of `stdout+stderr`. Never throws (resolves a `GateResult`).
 *Distinct from `verifyCommands`*: the gate is the **tool's enforced postcondition**; `verifyCommands`
 is the **agent's self-scope** injected into the prompt.
 
-### 8.6 Git delta (`git.ts`, #6)
+### 8.6 Git delta (`git.rs`, #6)
 Best-effort (any git failure → `null`, never throws; uses `git -C <cwd> ...`, `maxBuffer` 16 MiB).
 - `headAfter = rev-parse HEAD`; if null → not a repo → return null.
 - If `headBefore`: `newCommits = rev-list headBefore..HEAD`; `filesChanged = diff --name-only
@@ -589,16 +589,16 @@ Best-effort (any git failure → `null`, never throws; uses `git -C <cwd> ...`, 
 - `uncommittedFiles = parse(status --porcelain)` (strip the 2-char XY + space prefix; handle `->`
   renames; unquote quoted paths). `dirtyAfter = uncommittedFiles.length > 0`.
 
-### 8.7 Cost (`pricing.ts`)
+### 8.7 Cost (`pricing.rs`)
 Always best-effort, `costEstimated` always `true` (CLI emits no cost field). `null` if usage or a
 price entry is missing. Else `Σ(tokens_k × price_k) / 1e6` over input/output/cacheRead/cacheWrite.
 Prices come from the curated models map via the derived `priceMap` — no bare-id aliases.
 
-### 8.8 cursor-agent binary resolution (`cursor-bin.ts`)
+### 8.8 cursor-agent binary resolution (`cursor_bin.rs`)
 Order: explicit override → `$CURSOR_AGENT_BIN` → `which cursor-agent` → fallback
 `~/.local/bin/cursor-agent`.
 
-### 8.9 Doctor (`doctor.ts`)
+### 8.9 Doctor (`doctor.rs`)
 Pure parsers + injectable command runner + probes assembled by `runDoctor`:
 
 **Parsers**
@@ -632,7 +632,7 @@ buffer).
 
 ---
 
-## 9. Live progress → MCP notifications (`progress.ts`)
+## 9. Live progress → MCP notifications (`progress.rs`)
 
 `ProgressUpdate = { lastTool, tokensSoFar, elapsedMs, phase?, jobTag? }`.
 `formatProgress(u)` → `"[jobTag ]<lastTool|thinking> · <tok> tok · <sec>s"`.
@@ -644,12 +644,12 @@ buffer).
 - **Throttle:** emit immediately when `lastTool` changes; otherwise drop updates that arrive `<1000ms`
   after the last emission. (Avoids flooding the client on token-only updates.)
 
-In `index.ts`, the `progressSink` is derived per call from the MCP request's `extra` and passed to
+In `index.rs`, the `progressSink` is derived per call from the MCP request's `extra` and passed to
 `dispatch`/`wait*`/`answerDelegation`; `extra.signal` is forwarded as the abort signal.
 
 ---
 
-## 10. Server wiring & lifecycle (`index.ts`)
+## 10. Server wiring & lifecycle (`index.rs`)
 
 - Build paths relative to the module (`dist/..` or `src/..`) to locate bundled `config/models.json`.
 - `loadConfig({ modelsPath })`; read `~/.cursor/cli-config.json` (tolerate missing — fail-closed
@@ -674,15 +674,15 @@ These `#N` tags appear throughout the code and this spec:
 
 | # | Improvement | Where |
 |---|---|---|
-| #1 | NUL-byte prompt sanitization; incomplete-commit concern (`allowPartialCommit`) | `prompt.ts`, `finalize.ts` |
-| #2 | `promptPreamble` standing instructions | `config.ts`, `prompt.ts` |
-| #3 | `stderrTail` on failure only | `finalize.ts` |
-| #4 | Async job model: deadline-race, detach+jobId, idle watchdog, no hard cap, poll/wait/cancel | `job-registry.ts`, `index.ts` |
-| #5 | `verifyCommands` hard-scope bound (agent self-scope) | `prompt.ts`, `config.ts` |
-| #6 | Tool-computed git change-set (ground truth, not self-report) | `git.ts`, `finalize.ts` |
-| #7 | Tool-run `gate` postcondition (tool-enforced) | `gate.ts`, `finalize.ts` |
-| #8 | Same-path write serialization (BUSY, no queue) | `job-registry.ts` |
-| #9 | Per-call `idleMs`/`toolIdleMs` overrides; tiered idle watchdog (`phase`-aware: wider window while a tool call is in flight); raw stdout `activity` also re-arms; CANCELLED/STALLED still compute the change-set (`finalizeStall`, skips only gate + incomplete-commit) and `text` summarizes the job's last known progress instead of being empty | `job-registry.ts`, `stream.ts`, `backends/cursor.ts`, `finalize.ts`, `runner.ts`, `tool-schemas.ts` |
+| #1 | NUL-byte prompt sanitization; incomplete-commit concern (`allowPartialCommit`) | `prompt.rs`, `finalize.rs` |
+| #2 | `promptPreamble` standing instructions | `config.rs`, `prompt.rs` |
+| #3 | `stderrTail` on failure only | `finalize.rs` |
+| #4 | Async job model: deadline-race, detach+jobId, idle watchdog, no hard cap, poll/wait/cancel | `job_registry.rs`, `index.rs` |
+| #5 | `verifyCommands` hard-scope bound (agent self-scope) | `prompt.rs`, `config.rs` |
+| #6 | Tool-computed git change-set (ground truth, not self-report) | `git.rs`, `finalize.rs` |
+| #7 | Tool-run `gate` postcondition (tool-enforced) | `gate.rs`, `finalize.rs` |
+| #8 | Same-path write serialization (BUSY, no queue) | `job_registry.rs` |
+| #9 | Per-call `idleMs`/`toolIdleMs` overrides; tiered idle watchdog (`phase`-aware: wider window while a tool call is in flight); raw stdout `activity` also re-arms; CANCELLED/STALLED still compute the change-set (`finalizeStall`, skips only gate + incomplete-commit) and `text` summarizes the job's last known progress instead of being empty | `job_registry.rs`, `stream.rs`, `backends/cursor.rs`, `finalize.rs`, `runner.rs`, `tool_schemas.rs` |
 
 ---
 
@@ -710,19 +710,20 @@ model picks, waiting patterns, resume flow, plan-writer brief template); the for
 
 ### 13.1 As a Claude Code plugin
 ```jsonc
-// plugin.json in .claude-plugin/
-{ "name":"cursor-delegate", "version":"0.2.0", "description":"...", "skills":["./skills/delegate"] }
+// plugin.json in .claude-plugin/ — declares the server inline (no repo-root .mcp.json, which
+// Claude Code would also load as a project server whenever cwd is inside the repo)
+{ "name":"cursor-delegate", "version":"0.5.0", "description":"...", "skills":["./skills/delegate"],
+  "mcpServers": { "cursor-delegate": {
+    "type":"stdio", "command":"${CLAUDE_PLUGIN_ROOT}/bin/cursor-delegate-mcp", "timeout":600000 } } }
 // marketplace.json in .claude-plugin/ (cursor-delegate-local)
-// .mcp.json at repo root
-{ "mcpServers": { "cursor-delegate": {
-    "type":"stdio", "command":"node", "args":["${CLAUDE_PLUGIN_ROOT}/dist/index.js"], "timeout":600000 } } }
 ```
 Install: `claude plugin marketplace add ./` then `claude plugin install cursor-delegate@cursor-delegate-local`.
 
 ### 13.2 Build & register (`bin/setup.sh`, portable Linux/macOS)
-1. Resolve **this machine's** `node` (`command -v node`) — never bake a path.
+1. Require `cargo` on PATH.
 2. Warn if `cursor-agent` not on PATH (prerequisite: installed + `cursor-agent login`).
-3. `npm install && npm run build` (`tsc` → `dist/`; pure JS, no native deps).
+3. `cargo build --release` with the target dir under `$XDG_CACHE_HOME` (plugin install snapshots
+   the whole repo, so an in-repo `target/` would be copied), then copy the binary to `bin/`.
 4. Scaffold a **minimal** `~/.config/cursor-delegate/host-profile.json` (`requiredDeny: []` and
    empty policy defaults) **only if absent**; never overwrite an existing profile or the cli-config
    deny-list. Optional keys `default` / `models` extend or override the bundled allow-list.
@@ -731,21 +732,13 @@ Install: `claude plugin marketplace add ./` then `claude plugin install cursor-d
    without changes.
 
 ### 13.3 Manual install (no `claude` CLI)
-Add the stdio entry from `.mcp.json` to your MCP client's config directly (resolve
-`${CLAUDE_PLUGIN_ROOT}` to the installed plugin cache path).
+Add the stdio entry from `plugin.json` to your MCP client's config directly, pointing `command` at
+the built binary.
 
-### 13.4 package.json essentials
-```jsonc
-{ "type":"module",
-  "bin": { "cursor-delegate-mcp":"dist/index.js" },
-  "scripts": { "build":"tsc",
-               "test":"node --import tsx --test \"tests/**/*.test.ts\"",
-               "test:live":"CURSOR_DELEGATE_LIVE=1 node --import tsx --test \"tests/**/*.live.test.ts\"" },
-  "dependencies": { "@modelcontextprotocol/sdk":"^1.0.0" },
-  "devDependencies": { "tsx":"^4", "typescript":"^5.6", "@types/node":"^22" } }
-```
-`tsconfig`: `target ES2022`, `module/moduleResolution NodeNext`, `strict`, `rootDir src`,
-`outDir dist`.
+### 13.4 Crate
+Dependencies: `serde`, `serde_json` (`preserve_order`), `indexmap`, `libc`. `config/models.json`
+is compiled in with `include_str!`. Release profile: `opt-level = "s"`, LTO, one codegen unit,
+stripped (~720 KB binary, ~2 MB idle RSS).
 
 ---
 
@@ -762,8 +755,9 @@ Add the stdio entry from `.mcp.json` to your MCP client's config directly (resol
 Every impurity is injected, so units test against fakes: a `spawnFn` that replays canned
 stream-json lines, a fake `Clock` (`now()` + `setTimer`) to drive deadline/idle/timeout
 deterministically, an injected `finalize`, and an in-memory config reader. Doctor probes take an
-injected `runCommand`. There is one live integration test (real `cursor-agent`, opt-in via
-`npm run test:live`). Coverage mirrors the module list: capability, isolation, safety, prompt,
+injected `runCommand`. `tests/e2e.rs` drives the real binary over stdio against a fake
+`cursor-agent` script, and `parity/check.sh` replays `parity/requests.jsonl` against a reply
+snapshot and gates idle RSS. Coverage mirrors the module list: capability, isolation, safety, prompt,
 models, pricing, output, git, gate, stream, config, tool-schemas, doctor, job-registry (incl.
 lookupAnswer), cursor adapter/bin, finalize, progress, runner (runDelegation + answerDelegation),
 plus an `index` smoke test.

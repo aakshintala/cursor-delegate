@@ -756,7 +756,8 @@ Every impurity is injected, so units test against fakes: a `spawnFn` that replay
 stream-json lines, a fake `Clock` (`now()` + `setTimer`) to drive deadline/idle/timeout
 deterministically, an injected `finalize`, and an in-memory config reader. Doctor probes take an
 injected `runCommand`. `tests/e2e.rs` drives the real binary over stdio against a fake
-`cursor-agent` script, and `parity/check.sh` replays `parity/requests.jsonl` against a reply
+`cursor-agent` script, `tests/live.rs` (`#[ignore]`d; `cargo test --test live -- --ignored`)
+runs one `ask` round trip against the real `cursor-agent`, and `parity/check.sh` replays `parity/requests.jsonl` against a reply
 snapshot and gates idle RSS. Coverage mirrors the module list: capability, isolation, safety, prompt,
 models, pricing, output, git, gate, stream, config, tool-schemas, doctor, job-registry (incl.
 lookupAnswer), cursor adapter/bin, finalize, progress, runner (runDelegation + answerDelegation),

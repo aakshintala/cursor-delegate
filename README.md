@@ -67,6 +67,7 @@ claude plugin install cursor-delegate@cursor-delegate-local --scope user
 
 ```bash
 cargo test                                     # unit tests + stdio e2e against a fake cursor-agent
+cargo test --test live -- --ignored            # opt-in: real cursor-agent (logged in; spends one request)
 cargo fmt --check && cargo clippy -- -D warnings
 parity/check.sh                                # reply snapshot + idle RSS gate (needs jq)
 ```

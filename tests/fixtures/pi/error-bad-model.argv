@@ -1,0 +1,1 @@
+pi -p --mode json --model openai-codex/no-such-model --session-id a86b4f04-f9fe-4fe2-88f2-9c07c39dda68 

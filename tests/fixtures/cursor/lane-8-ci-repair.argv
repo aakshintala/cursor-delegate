@@ -1,0 +1,1 @@
+cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model composer-2.5 --workspace /Users/user/work/delegate-8-ci --sandbox disabled --resume 57a946cc-91a7-4752-a451-3ee6bfd5841f 

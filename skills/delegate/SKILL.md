@@ -15,7 +15,7 @@ table with backends and prices.
 
 Pick from the tier that fits the work, in this order of preference:
 
-| Tier | Work | Order |
+| Tier | Fits | Order |
 |---|---|---|
 | Read | exploration, fact-finding, research, triage | `composer-2.5` → `openai-codex/gpt-6-luna:medium` |
 | Work | most implementation and review | `opencode-go/muse-spark-1.3-contributor` → `claude-sonnet-5-5` → `openai-codex/gpt-6-luna:xhigh` |

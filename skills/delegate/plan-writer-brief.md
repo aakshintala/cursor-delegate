@@ -1,11 +1,10 @@
 # Plan-writer brief
 
-Read this only when delegating plan authoring. Copy everything inside the fence
-into `cursor_run.prompt`, replacing every `«...»` placeholder. Use
-`model: "cursor-grok-4.6-xhigh"` unless the user names another allow-list id.
+Read this only when delegating plan authoring. Fill every `«...»` placeholder, then send it
+as in [SKILL.md § Plan writing](./SKILL.md#plan-writing).
 
 A filled brief replaces placeholders and nothing else. `«PLAN_OUTPUT_PATH»`
-becomes `docs/plans/2026-07-09-delegate-skill.md`; `«Feature Name»` becomes the
+becomes `docs/plans/YYYY-MM-DD-<slug>.md`; `«Feature Name»` becomes the
 feature; `«PASTE_APPROVED_SPEC_OR_SUMMARY»` becomes the spec text or the paths to
 paste from. Sections whose shape the delegate should reuse rather than restate
 (`Task structure`, `No placeholders`) can collapse to one line pointing back at
@@ -18,6 +17,7 @@ implementation plan markdown file — planning document only.
 
 ## Hard rules
 
+- Do not delegate further.
 - Do NOT implement code. Do NOT modify source. Do NOT run build/test commands
   except read-only inspection needed to name exact paths (`ls`, `rg`, `Read`).
 - Do NOT commit. Do NOT create git commits or PRs.
@@ -29,8 +29,7 @@ implementation plan markdown file — planning document only.
 
   STATUS: NEEDS_CONTEXT
 
-  The orchestrator will answer via cursor_answer and you will resume. Do not
-  guess through blockers.
+  Stop and ask; the orchestrator answers and you continue. Do not guess through blockers.
 - When the plan is complete, end with:
 
   STATUS: DONE
@@ -38,7 +37,6 @@ implementation plan markdown file — planning document only.
 ## Output path
 
 Write the plan to: «PLAN_OUTPUT_PATH»
-(Example: docs/superpowers/plans/YYYY-MM-DD-«feature-slug».md)
 
 ## Plan document header (required)
 
@@ -46,7 +44,7 @@ Start the plan with this header shape (fill Goal / Architecture / Tech Stack):
 
 # «Feature Name» Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** «one sentence»
 
@@ -117,7 +115,7 @@ After writing all tasks, include a `## Self-Review` section that checks:
 
 ## Tool surface you may reference (do not re-implement)
 
-«DOCUMENT_ASSUMED_APIS — e.g. cursor_run model allow-list, requireNonClaude, cursor_answer, NEEDS_CONTEXT»
+«DOCUMENT_ASSUMED_APIS — e.g. the `delegate` commands and model ids the plan relies on»
 
 Begin now. Read only what you need to name exact paths, then write the full plan.
 ```

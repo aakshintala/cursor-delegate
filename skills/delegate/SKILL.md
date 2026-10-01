@@ -1,260 +1,137 @@
 ---
 name: delegate
 description: >
-  Orchestrate coding, research, plan-writing, and review work through cursor-delegate
-  MCP tools (cursor_run / cursor_answer). Use when the user asks to delegate to Cursor,
-  fan out plan-writing or implementation to a non-Claude model, pick a model for
-  cursor_run, resume a NEEDS_CONTEXT parked job, or follow the agent catalog roles
-  (Verifier, Triager, Design-critic, Codemod, Re-implementer, SP-implementer,
-  SP reviewers).
+  Delegate coding, research, plan-writing, or review work to other models through the
+  `delegate` CLI. Use for fanning work out, picking a model, writing a brief, waiting on
+  or reading a job, or answering a NEEDS_CONTEXT job with resume.
 ---
 
-# Delegate (cursor-delegate)
+# Delegate
 
-You are the **orchestrator**. Cursor models do the token-heavy delegated work via
-`cursor_run`. You review results, answer clarifying questions, and never treat the
-catalog as Cursor-side config — it is a convention layer you construct calls from.
+You are the **orchestrator**. Run `delegate` (no arguments) for the command syntax, and
+`delegate models` for the live model table. Never review an agent's output with the model that
+produced it.
 
-**Governing principle:** never review an agent's output with the same model that
-produced it. For reviewer roles, pass `requireNonClaude: true` and pick a
-non-Claude allow-list model.
+Only `cursor` models run today. `pi` and `claude` models appear in `delegate models`, but `run`
+rejects them with "backend not implemented" (exit 2).
 
 ## When to delegate
 
-Delegate when the work is:
+Delegate token-heavy plan writing (you hold the approved spec), mechanical or well-scoped
+coding, uncorrelated review, and bulk triage or summarising. Keep the product decision, and any
+edit the user wants to watch, for yourself.
 
-- **Token-heavy plan authoring** after you (or the user) already have a spec —
-  the driving use case: brainstorm/spec stays with you; detailed plan-writing goes
-  to `cursor-grok-4.6-xhigh`.
-- **Mechanical or well-scoped coding** (codemod, single planned task, rebuild from
-  a clear spec).
-- **Uncorrelated review** (refute a claim, critique a design, review a spec or
-  implementation) on a **different** model than the producer.
-- **Bulk triage / classify / summarize** where quality bar is lower than coding.
-
-Do **not** delegate when you still need to invent the product decision yourself,
-when the user must stay in the loop on every edit, or when the only available
-models would review with the same id that produced the artifact.
-
-**Size is not a reason to skip the delegate.** Once a session is set up to
-implement through `cursor_run`, a three-line edit goes through it too. The round
-trip is not what you are buying — the `gate` is, and a hand edit skips it. A
-change that feels too trivial to brief means the brief will be short, not that
-the delegate should be skipped.
+Size is no reason to skip it. A three-line edit goes through `delegate run --gate` too: the
+gate is what you are buying, and a hand edit skips it.
 
 ## Model picks
 
-Allow-list ids only (server rejects anything else): `composer-2.5`,
-`cursor-grok-4.6-xhigh`, `cursor-grok-4.6-high`, `cursor-grok-4.5-high`,
-`gemini-3.5-flash`, `gpt-5.6-sol-high`, `gpt-5.6-terra-high`.
-`cursor-grok-4.6-high` and `cursor-grok-4.5-high` remain callable; they
-are not the plan-writer/coding pick.
+| Use | Model |
+|---|---|
+| Bulk, default | `composer-2.5` |
+| Hard work, plan writing | `grok-4.7-high`, `grok-4.7-xhigh` |
+| Cheap bulk (pi, not yet runnable) | `opencode-go/muse-spark-1.3-contributor` |
+| Moderate | `claude-sonnet-5-5`, `claude-opus-5-5` (claude, not yet runnable) |
+| Escalation only | `openai-codex/*` (pi, not yet runnable) |
 
-| Intent | `model` | `requireNonClaude` |
-|---|---|---|
-| Bulk / cheap / default | `composer-2.5` | `false` (omit) |
-| Plan-writing / strong coding | `cursor-grok-4.6-xhigh` | `false` (omit) |
-| Diverse review (uncorrelated) | `gemini-3.5-flash`, `gpt-5.6-sol-high`, or `gpt-5.6-terra-high` | `true` |
+## Roles
 
-Omit `model` only when `composer-2.5` is acceptable — that is the server default.
+Each role is a `delegate run` you construct; nothing is configured anywhere.
 
-## Agent catalog (convention tuples)
+| Role | Model | `--capability` | Prompt shape |
+|---|---|---|---|
+| Verifier | `grok-4.7-xhigh` | `read-only` | try to refute the claim, find the bug |
+| Triager | `composer-2.5` | `read-only` | classify, route, summarise |
+| Design-critic | `grok-4.7-high` | `read-only` | critique a design, surface risks |
+| Codemod | `composer-2.5` | `read-write` | mechanical edit across a tree |
+| Re-implementer | `grok-4.7-xhigh` | `read-write` | rebuild a component from a spec |
+| Implementer | `composer-2.5` | `read-write` | one planned task |
+| Spec / quality reviewer | not the implementer's model | `read-only` | review for gaps / quality |
 
-These "agents" are **convention tuples over `cursor_run`** — you construct each
-call. Nothing here is Cursor-side configuration; this is documentation, not code.
-
-| Agent | model | requireNonClaude | capability | isolation | prompt shape |
-|---|---|---|---|---|---|
-| **Verifier** | `gpt-5.6-sol-high` | `true` | `ask` | None | adversarial: *try to refute the claim / find the bug* |
-| **Triager** | `composer-2.5` | `false` | `ask` | None | classify / route / summarize an issue |
-| **Design-critic** | `gemini-3.5-flash` | `true` | `plan` | None | critique a design, surface risks, propose alternatives |
-| **Codemod** | `composer-2.5` | `false` | `write` | CallerProvided | mechanical, well-scoped edit across a tree |
-| **Re-implementer** | `cursor-grok-4.6-xhigh` | `false` | `write` | CallerProvided | rebuild a component from a spec |
-| **SP-implementer** | `composer-2.5` | `false` | `write` | CallerProvided | implement a single planned task |
-| **SP spec-reviewer** | `gemini-3.5-flash` | `true` | `ask` | None | review a spec for gaps (different model than implementer) |
-| **SP quality-reviewer** | `gpt-5.6-terra-high` | `true` | `ask` | None | review an implementation for quality (different model than implementer) |
-
-Notes:
-
-- Implementers use `CallerProvided` isolation so writes land in a known working tree and
-  participate in the same-path write lock.
-- Always pass `verifyCommands` to bound what an implementer may run, and a `gate` to enforce
-  the postcondition the tool itself checks.
-- Plan-writing (not a named row above) uses `cursor-grok-4.6-xhigh` with `capability` `ask`
-  or `plan`; see [`plan-writer-brief.md`](./plan-writer-brief.md).
-
-## Calling `cursor_run`
-
-Minimum shape:
-
-```json
-{
-  "prompt": "<task for the Cursor agent>",
-  "model": "cursor-grok-4.6-xhigh",
-  "capability": "ask"
-}
-```
-
-Common additions:
-
-- `capability`: `ask` | `plan` | `write` | `write-unsandboxed`
-- `isolation`: `{ "type": "CallerProvided", "path": "<abs working tree>" }` for writes
-- `verifyCommands`: string[] — only verify commands the agent may run
-- `gate`: postcondition **you** (the tool) enforce after the agent — a shell
-  command, see [Writing a gate](#writing-a-gate)
-- `requireNonClaude`: `true` for reviewer roles
-- `background`: `true` to fan out; then wait for completion (see below)
-
-Always end delegated prompts with an instruction to finish with a trailing
-`STATUS: DONE` | `BLOCKED` | `NEEDS_CONTEXT` line (the server also injects a
-status-convention block; reinforce it in plan-writer briefs).
-
-## Writing a gate
-
-`gate` is a **shell command string**, executed verbatim by `/bin/sh -c`. An
-English postcondition ("the test output contains no failure line") makes `sh` die
-on a syntax error: the job returns `DONE_WITH_CONCERNS` with
-`gateResult.passed: false`, and nothing was checked. The brief still *looks*
-gated. Put the prose version in the prompt body and keep `gate` runnable:
-
-```
-cargo fmt --check && cargo clippy -- -D warnings && cargo test
-```
-
-Add an explicit `grep` wherever a tool's exit code is known to lie about failure.
-
-**Read `gateResult` in the job record, not the top-level status**, and re-run the
-verification yourself whenever `passed` is false.
-
-**Write the gate as the next consumer's first action, not as an existence
-check.** "The artifact was produced" and "the artifact works" come apart exactly
-where permissions, encodings and platforms differ, which is where the bugs are.
-If a packer feeds a runner, the gate runs the runner. If a generator feeds a
-parser, the gate parses. A gate that greps for a file is not a gate.
-
-## Waiting on jobs
-
-**Under a minute:** block the turn with `cursor_wait` (one job), `cursor_wait_any`
-(first of several) or `cursor_wait_all` (all of several). Each takes `timeoutMs`
-(default 120000, clamped `[1000, 600000]`) and returns the current `RUNNING`
-snapshot on timeout rather than hanging.
-
-**Longer:** do not hold the turn inside `cursor_wait*`. Watch the status record
-the server writes to disk, from a background shell, so the turn can end and one
-notification arrives when the job or batch is done.
-
-### The status record
-
-Every dispatched job gets one JSON file at
-`join(os.tmpdir(), "cursor-delegate-jobs", "<jobId>.json")` — resolve it as
-`${TMPDIR:-/tmp}/cursor-delegate-jobs/${JOB_ID}.json`.
-
-It holds exactly what `cursor_poll` would return: `{"status": "RUNNING",
-"lastHeartbeatAt": <server ms>, "progress": {...}}` while running, and
-`{"status": "<terminal>", "result": <RunOutput>}` when done — the full payload,
-not a status label.
-
-The server writes at start, refreshes every 30s while running, and writes once
-more at the terminal transition. **If `lastHeartbeatAt` stops advancing while the
-record still says `RUNNING`, the server died mid-job**: redispatch rather than
-wait.
-
-### The watcher
-
-One bounded loop handles one job or many — the `timeout` is what stops a missing
-or never-written record hanging forever. `jq` is the one host dependency.
+## Running
 
 ```bash
-JOB_IDS=( "<id-a>" )   # one entry per background cursor_run
-FILES=(); for id in "${JOB_IDS[@]}"; do FILES+=( "${TMPDIR:-/tmp}/cursor-delegate-jobs/${id}.json" ); done
-
-command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
-
-timeout 300 bash -c '
-  FILES=("$@")
-  until all=true; for f in "${FILES[@]}"; do
-           jq -e ".status != \"RUNNING\"" "$f" >/dev/null 2>&1 || { all=false; break; }
-         done; $all
-  do sleep 2; done
-  for f in "${FILES[@]}"; do echo "=== $f ==="; cat "$f"; echo; done
-' _ "${FILES[@]}"
+delegate run --model composer-2.5 --capability read-write --cwd /abs/repo \
+  --gate 'cargo fmt --check && cargo clippy -- -D warnings && cargo test' < brief.md
 ```
 
-In Claude Code, run that with the **Bash** tool and `run_in_background: true`.
-Its stdout is the terminal `PollResult` JSON for every job.
+`run` prints the job id and returns; the job runs in a detached supervisor. A `read-write` job
+holds an exclusive lock on its cwd, so a second one there exits 3 (BUSY).
 
-### `NEEDS_CONTEXT` ends the wait, not the job
+**Write the gate as a shell command** that `/bin/sh -c` runs: an English postcondition is a
+syntax error, and nothing is checked. Make it the next consumer's first action: if a packer
+feeds a runner, the gate runs the runner. A gate that greps for a file is not a gate. Read
+`result.gateResult` in the record, and rerun the check yourself when `passed` is false.
 
-When a delegate parks for input the record leaves `RUNNING` with
-`status: "NEEDS_CONTEXT"` and the full `result`, so the watcher exits and prints
-it. Answer via [`cursor_answer`](#needs-input-resume-flow), then wait again on the
-resumed job.
+`delegate resume <id>` takes the new prompt on stdin and prints the new job id. `--model` must
+stay on the same backend. It adds `supersededBy` to the old record, and exits 2 on a `RUNNING`
+job or a record with no session id (a `CANCELLED` one). Answer `NEEDS_CONTEXT` with it.
 
-`cursor_answer` resumes under a **new jobId** and stamps the parked record with
-`"supersededBy": "<newJobId>"` — a forward pointer, not a status change. The
-original record stays `NEEDS_CONTEXT` forever; follow the chain to the new id.
+`--tool-idle-ms` widens how long a running tool may stay silent before the idle watchdog
+kills the job (default 1800000, 30 min; a model silent between tools gets 300000). It also
+bounds the gate.
 
-## Needs-input resume flow
+## Waiting
 
-1. You call `cursor_run` (foreground or `background: true`).
-2. If the result `status` is `NEEDS_CONTEXT`, the result always includes a `jobId`
-   (parked job). The `text` field **is** the delegate's question — no separate
-   question field.
-3. Decide the answer yourself (orchestrator), or ask the human if needed.
-4. Resume with:
+Run this with `run_in_background: true`; it is the only way to wait. One notification arrives
+when every listed job is terminal, with their records on stdout:
+
+```bash
+delegate watch <id-a> <id-b> --timeout 1800
+```
+
+## Reading the result
+
+The record is `$TMPDIR/delegate-jobs/<id>.json` (a terminal record has no `lastHeartbeatAt`):
 
 ```json
-{
-  "jobId": "<from the NEEDS_CONTEXT result>",
-  "answer": "<your answer>"
-}
+{"status":"DONE","result":{"status":"DONE","text":"Renamed the helper in 4 files.\n\nSTATUS: DONE","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","backend":"cursor","model":"composer-2.5","usage":{"inputTokens":18234,"outputTokens":1207,"cacheReadTokens":9100,"cacheWriteTokens":0},"costUsd":0.0148,"costEstimated":true,"durationMs":84213,"jobId":"d2f4a8e6-51c7-4b3a-8f90-6e1a7c3b5d02"},"supervisorPid":48213,"resume":{"model":"composer-2.5","cwd":"/abs/repo","capability":"read-write","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","gate":"cargo test","toolIdleMs":null}}
 ```
 
-via `cursor_answer`. The return shape matches `cursor_run` (may be terminal,
-`NEEDS_CONTEXT` again, or `RUNNING` + `jobId`).
+`status` is `DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`, `ERROR` (from the
+agent's trailing STATUS line or the supervisor), `CANCELLED`, or `STALLED` (the idle watchdog
+killed it: rerun, with a larger `--tool-idle-ms` if it stalled inside a tool). `text` is the agent's final message; for
+`NEEDS_CONTEXT` it is the question.
 
-5. Unknown/expired `jobId` → `NOT_FOUND`. A job not awaiting input is rejected
-   ("job is not awaiting an answer").
+- `result.gateResult`: a failing gate downgrades `DONE` to `DONE_WITH_CONCERNS`; it holds the
+  gate's `exitCode` and `outputTail`.
+- `result.changeSet`: git delta for the cwd (`newCommits`, `filesChanged`, `diffstat`,
+  `uncommittedFiles`).
+- `result.concerns`: warnings from the CLI, e.g. commits landed but the tree is still dirty.
 
-Reliability caveat: detection depends on the model emitting `STATUS: NEEDS_CONTEXT`.
-If a weak model skips the line and guesses, your review of the artifact is the
-backstop — especially for delegated plans.
+- **Resume chain:** follow `supersededBy` to the newest record; the old one stays as it was.
+- **Stuck job:** `watch` rewrites a record whose supervisor pid is dead to `ERROR` ("supervisor
+  died"). A live supervisor whose `lastHeartbeatAt` has gone stale is not healed: `delegate
+  cancel` it and rerun.
+- A weak model may skip the STATUS line and guess; your review of the artifact is the backstop.
 
-## Briefing and trusting the delegate
+## Exit codes
 
-**Verify your own brief before sending it.** Reviewing the returned diff does not
-catch an error you authored: the diff matches the brief, so it reads correct. For
-any claim of the form "every caller passes X" or "the remaining value is Y", run
-the search and read the surviving branch before writing it into the brief. Where
-a conditional is resolved at build or compile time, check which branch
-*production* takes rather than which looks like the default.
+| Code | Meaning |
+|---|---|
+| 0 | ok |
+| 1 | `watch` timed out, or `doctor` hard failure |
+| 2 | bad input or unknown job |
+| 3 | BUSY: a read-write job already holds that cwd |
 
-**Ask the delegate to verify stated premises** rather than take them on trust. A
-brief that says "confirm this before acting on it" turns your own error into a
-report instead of a silent wrong change.
+## Briefs
 
-**When a delegate's report contradicts a premise you supplied, believe the
-delegate first.** Before overriding its judgement — or attributing a change to it
-— get evidence. Reading the diff is not evidence, and neither is the fact that a
-delegate happened to be running. Search for the symbol's callers outside the file
-before disputing a retention: a stale-sounding name often means a rename is owed,
-not a deletion. For a file that vanished, `git log --diff-filter=D` and the
-delegate's own reported file list are evidence; concurrency is not. Ask.
+Every brief says "Do not delegate further." and states its goal, the files in scope, and the
+check that proves it done.
 
-## Driving use case: delegated plan-writing
+**Verify your own brief before sending it.** Reviewing the diff cannot catch an error you
+wrote, because the diff matches the brief. Before writing "every caller passes X", run the
+search and read the surviving branch. Tell the delegate to confirm stated premises before
+acting on them.
 
-1. You hold the approved spec (brainstorm done).
-2. Read [`plan-writer-brief.md`](./plan-writer-brief.md) and fill every
-   placeholder. Never send an unfilled template.
-3. `cursor_run` with `model: "cursor-grok-4.6-xhigh"` and `capability: "ask"` or
-   `"plan"`. Use `write` only when the delegate must land the plan in the repo.
-4. On `NEEDS_CONTEXT`, answer via `cursor_answer` and continue to a terminal
-   status.
-5. Review the plan yourself, then run a Verifier or Design-critic on a different
-   model with `requireNonClaude: true`.
+**When the report contradicts a premise you supplied, believe the delegate first.** Get
+evidence before overriding it: search for the symbol's callers, or `git log --diff-filter=D`
+for a vanished file. Reading the diff is not evidence.
 
-## Review after plan-writing
+## Plan writing
 
-Prefer a catalog **Design-critic** or **Verifier** on `gemini-3.5-flash` or
-`gpt-5.6-sol-high` with `requireNonClaude: true` — never `cursor-grok-4.6-xhigh` reviewing
-its own plan.
+1. Fill every placeholder in `plan-writer-brief.md`; never send an unfilled template.
+2. `delegate run --model grok-4.7-xhigh --capability read-only < brief.md`, then `watch`. Use
+   `read-write` only when the delegate must land the plan in the repo.
+3. Answer `NEEDS_CONTEXT` with `delegate resume`.
+4. Review the plan yourself, then run a Verifier or Design-critic on a different model.

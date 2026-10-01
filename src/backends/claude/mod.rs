@@ -146,8 +146,8 @@ mod tests {
 
     #[test]
     fn fixtures_parse_to_a_normalized_result() {
-        let dir =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude");
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/contract/claude");
         let mut files: Vec<_> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
             .map(|e| e.unwrap().path())
@@ -179,70 +179,101 @@ mod tests {
             assert!(res.usage.is_some(), "{stem}");
             assert!(res.cost_usd.is_some(), "{stem}");
             assert!(!res.text.is_empty(), "{stem}");
-            if stem.starts_with("auto-refusal") {
-                // #6 recorded no refusal: the model declined in prose, permission_denials stayed empty.
-                assert_eq!(res.is_error, Some(false), "{stem}");
-                assert!(res.permission_denials.is_empty(), "{stem}");
-                assert!(!res.text.is_empty(), "{stem}");
-            }
-            if stem == "error-bad-model" {
-                // subtype is "success"; is_error is what counts.
-                assert_eq!(res.is_error, Some(true), "{stem}");
-                assert_eq!(
-                    res.text,
-                    "There's an issue with the selected model (no-such-model). It may not exist or you may not have access to it. Run --model to pick a different model."
-                );
-            } else {
-                assert_eq!(res.is_error, Some(false), "{stem}");
-            }
-            if matches!(stem.as_str(), "plan-edit-request" | "needs-context") {
-                assert!(res.text.contains("STATUS: NEEDS_CONTEXT"), "{stem}");
-            }
-            if stem == "resume-answer" {
-                assert_eq!(
-                    res.session_id.as_deref(),
-                    Some("25dddfc3-4271-4019-9de0-6795bd6483fa")
-                );
-            }
-            if stem == "auto-fix" {
-                let mut state = init_stream_state();
-                for line in stdout.lines() {
-                    parse_line(line, &mut state);
+            match stem.as_str() {
+                "auto-refusal" | "auto-refusal-exfil" => {
+                    // #6 recorded no refusal: the model declined in prose, permission_denials stayed empty.
+                    assert_eq!(res.is_error, Some(false), "{stem}");
+                    assert!(res.permission_denials.is_empty(), "{stem}");
+                    assert!(!res.text.is_empty(), "{stem}");
                 }
-                assert!(state.last_tool.is_some(), "auto-fix saw no tool call");
-                assert!(
-                    state.files_touched.iter().any(|p| p.ends_with("calc.py")),
-                    "{:?}",
-                    state.files_touched
-                );
-            }
-            if stem == "plan-plain-answer" {
-                assert_eq!(
-                    res,
-                    BackendResult {
-                        text: "391\n\nSTATUS: DONE".into(),
-                        session_id: Some("25dddfc3-4271-4019-9de0-6795bd6483fa".into()),
-                        usage: Some(Usage {
-                            input_tokens: 2.0,
-                            output_tokens: 12.0,
-                            cache_read_tokens: 10261.0,
-                            cache_write_tokens: 16891.0,
-                        }),
-                        cost_usd: Some(0.0697402),
-                        is_error: Some(false),
-                        duration_ms: Some(2245.0),
-                        clean_exit: true,
-                        stderr: String::new(),
-                        permission_denials: Vec::new(),
+                "error-bad-model" => {
+                    // subtype is "success"; is_error is what counts.
+                    assert_eq!(res.is_error, Some(true), "{stem}");
+                    assert_eq!(
+                        res.text,
+                        "There's an issue with the selected model (no-such-model). It may not exist or you may not have access to it. Run --model to pick a different model."
+                    );
+                }
+                "plan-edit-request" | "needs-context" => {
+                    assert_eq!(res.is_error, Some(false), "{stem}");
+                    assert!(res.text.contains("STATUS: NEEDS_CONTEXT"), "{stem}");
+                }
+                "resume-answer" => {
+                    assert_eq!(res.is_error, Some(false), "{stem}");
+                    assert_eq!(
+                        res.session_id.as_deref(),
+                        Some("25dddfc3-4271-4019-9de0-6795bd6483fa")
+                    );
+                }
+                "auto-fix" => {
+                    assert_eq!(res.is_error, Some(false), "{stem}");
+                    let mut state = init_stream_state();
+                    for line in stdout.lines() {
+                        parse_line(line, &mut state);
                     }
-                );
-                let mut ctx = default_finalize_ctx("/repo", "claude-sonnet-5-5", "claude");
-                ctx.git_delta = Some(Box::new(|_, _| None));
-                let out = finalize_run(&res, &ctx);
-                assert_eq!(out.cost_usd, Some(0.0697402));
-                assert!(!out.cost_estimated);
-                assert_eq!(out.status, RunStatus::Done);
+                    assert!(state.last_tool.is_some(), "auto-fix saw no tool call");
+                    assert!(
+                        state.files_touched.iter().any(|p| p.ends_with("calc.py")),
+                        "{:?}",
+                        state.files_touched
+                    );
+                }
+                "plan-review" => {
+                    assert_eq!(res.is_error, Some(false), "{stem}");
+                    assert!(!res.text.is_empty(), "{stem}");
+                }
+                "plan-plain-answer" => {
+                    assert_eq!(
+                        res,
+                        BackendResult {
+                            text: "391\n\nSTATUS: DONE".into(),
+                            session_id: Some("25dddfc3-4271-4019-9de0-6795bd6483fa".into()),
+                            usage: Some(Usage {
+                                input_tokens: 2.0,
+                                output_tokens: 12.0,
+                                cache_read_tokens: 10261.0,
+                                cache_write_tokens: 16891.0,
+                            }),
+                            cost_usd: Some(0.0697402),
+                            is_error: Some(false),
+                            duration_ms: Some(2245.0),
+                            clean_exit: true,
+                            stderr: String::new(),
+                            permission_denials: Vec::new(),
+                        }
+                    );
+                    let mut ctx = default_finalize_ctx("/repo", "claude-sonnet-5-5", "claude");
+                    ctx.git_delta = Some(Box::new(|_, _| None));
+                    let out = finalize_run(&res, &ctx);
+                    assert_eq!(out.cost_usd, Some(0.0697402));
+                    assert!(!out.cost_estimated);
+                    assert_eq!(out.status, RunStatus::Done);
+                }
+                other => panic!("unexpected claude fixture: {other}"),
             }
+        }
+    }
+
+    #[test]
+    fn recorded_fixtures_parse_without_panicking() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/recorded/claude");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("stdout"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no recorded claude fixtures");
+
+        for path in files {
+            let stdout = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let stderr = std::fs::read_to_string(path.with_extension("stderr")).unwrap_or_default();
+            // Archive only: a recorded run must parse, under either exit
+            // code. No assertions on the result itself.
+            let _ = parse_stdout(&stdout, true, &stderr);
+            let _ = parse_stdout(&stdout, false, &stderr);
         }
     }
 

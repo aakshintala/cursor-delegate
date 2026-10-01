@@ -89,7 +89,7 @@ fn pi_live_plain_answer_records_a_fixture() {
         String::from_utf8_lossy(&out.stderr)
     );
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/pi/live-plain-answer.stdout");
+        .join("tests/fixtures/recorded/pi/live-plain-answer.stdout");
     let stdout = std::fs::read_to_string(&fixture).unwrap();
     let res = delegate::backends::pi::parse_stdout(&stdout, true, "");
     assert!(res.text.contains("391"), "{}", res.text);
@@ -101,7 +101,7 @@ fn pi_live_plain_answer_records_a_fixture() {
 }
 
 /// Opt-in: real `claude`. Run with: cargo test --test live -- --ignored
-/// Writes the redacted stream to tests/fixtures/claude/live-plain-answer.stdout.
+/// Writes the redacted stream to tests/fixtures/recorded/claude/live-plain-answer.stdout.
 #[test]
 #[ignore = "needs a logged-in claude; spends a Claude request"]
 fn ask_multiplies_on_real_claude() {
@@ -160,7 +160,7 @@ fn ask_multiplies_on_real_claude() {
     assert_eq!(rec["status"], "DONE");
     assert!(rec["result"]["text"].as_str().unwrap().contains("391"));
 
-    let fixture = repo.join("tests/fixtures/claude/live-plain-answer.stdout");
+    let fixture = repo.join("tests/fixtures/recorded/claude/live-plain-answer.stdout");
     let jq = Command::new("jq")
         .current_dir(&repo)
         .args([

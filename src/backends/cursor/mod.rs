@@ -143,11 +143,12 @@ fn finish(
             text: raw.result.unwrap_or_default(),
             session_id: raw.session_id,
             usage: raw.usage,
-            cost_usd: None,
+            cost_usd: raw.cost_usd,
             is_error: raw.is_error,
             duration_ms: raw.duration_ms,
             clean_exit,
             stderr: stderr.to_string(),
+            permission_denials: raw.permission_denials,
         };
     }
     // A non-clean exit with no stdout is the bad-model case: the text is the stderr we kept.
@@ -400,6 +401,7 @@ mod tests {
                         duration_ms: Some(3279.0),
                         clean_exit: true,
                         stderr: String::new(),
+                        permission_denials: Vec::new(),
                     }
                 );
             }

@@ -55,6 +55,7 @@ pub fn to_run_output(
         gate_result: None,
         change_set: None,
         concerns: None,
+        permission_denials: res.permission_denials.clone(),
     }
 }
 

@@ -29,16 +29,18 @@ impl Capability {
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     #[serde(serialize_with = "crate::util::js_num")]
-    #[serde(default)]
+    #[serde(default, alias = "input_tokens")]
     pub input_tokens: f64,
     #[serde(serialize_with = "crate::util::js_num")]
-    #[serde(default)]
+    #[serde(default, alias = "output_tokens")]
     pub output_tokens: f64,
+    /// Claude reports this as `cache_read_input_tokens`.
     #[serde(serialize_with = "crate::util::js_num")]
-    #[serde(default)]
+    #[serde(default, alias = "cache_read_input_tokens")]
     pub cache_read_tokens: f64,
+    /// Claude reports this as `cache_creation_input_tokens`.
     #[serde(serialize_with = "crate::util::js_num")]
-    #[serde(default)]
+    #[serde(default, alias = "cache_creation_input_tokens")]
     pub cache_write_tokens: f64,
 }
 
@@ -142,6 +144,9 @@ pub struct RunOutput {
     pub change_set: Option<ChangeSet>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concerns: Option<Vec<String>>,
+    /// Claude `permission_denials` objects, kept whole. Empty stays off the record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_denials: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -235,6 +240,20 @@ pub struct DoctorBackendSection {
     pub model_failures: Vec<String>,
 }
 
+/// Claude doctor probes. Absent when the cursor test seam skipped them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DoctorClaudeInfo {
+    pub found: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_error: Option<String>,
+    pub logged_in: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorReport {
@@ -247,6 +266,8 @@ pub struct DoctorReport {
     pub sections: Vec<DoctorBackendSection>,
     pub warnings: Vec<String>,
     pub failures: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<DoctorClaudeInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

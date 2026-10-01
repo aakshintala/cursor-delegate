@@ -141,6 +141,7 @@ pub(crate) fn fake_finalize(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput
         gate_result: None,
         change_set: None,
         concerns: None,
+        permission_denials: res.permission_denials.clone(),
     }
 }
 

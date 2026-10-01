@@ -145,13 +145,12 @@ mod tests {
     }
 
     #[test]
-    fn claude_backend_is_not_implemented() {
+    fn claude_backend_resolves() {
         let (d, m) = base();
-        let e = resolve_model(Some("claude-sonnet-5-5"), &(d.as_str(), &m)).unwrap_err();
-        assert_eq!(
-            e.to_string(),
-            "model \"claude-sonnet-5-5\" uses backend \"claude\", which is not implemented yet"
-        );
+        let r = resolve_model(Some("claude-sonnet-5-5"), &(d.as_str(), &m)).unwrap();
+        assert_eq!(r.model, "claude-sonnet-5-5");
+        assert_eq!(r.backend, "claude");
+        assert_eq!(r.price, m["claude-sonnet-5-5"].price);
     }
 
     #[test]

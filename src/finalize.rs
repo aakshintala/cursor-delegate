@@ -78,10 +78,33 @@ complete, buildable change. Review the uncommitted files."
         }
         out.change_set = Some(cs);
     }
+    // A non-empty denial list downgrades DONE. ERROR stays ERROR; the objects are already
+    // on the record from `to_run_output`.
+    if !res.permission_denials.is_empty() && out.status != RunStatus::Error {
+        concerns.push(format!(
+            "permission denied: {}",
+            denial_names(&res.permission_denials)
+        ));
+        out.status = RunStatus::DoneWithConcerns;
+    }
     if !concerns.is_empty() {
         out.concerns = Some(concerns);
     }
     out
+}
+
+fn denial_names(denials: &[serde_json::Value]) -> String {
+    denials
+        .iter()
+        .map(|d| {
+            d.get("tool_name")
+                .or_else(|| d.get("toolName"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn finalize_stall(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput {

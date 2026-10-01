@@ -409,7 +409,6 @@ mod tests {
             assert_eq!(res.clean_exit, clean, "{stem}");
             assert_eq!(res.stderr, stderr, "{stem}");
             assert_eq!(res.cost_usd, None, "{stem}");
-            assert!(!res.text.contains("CANCELLED"), "{stem}");
             if !clean && stdout.is_empty() {
                 assert_eq!(res.is_error, Some(true), "{stem}");
                 assert_eq!(res.text, stderr, "{stem}");

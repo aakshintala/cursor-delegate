@@ -3,10 +3,10 @@
 #
 #   scripts/leak-scan.sh [PATH...]   (default: tests/fixtures)
 #
-# Patterns are built at runtime: $USER, `git config user.name` and
-# `git config user.email`, plus fixed markers for hook output and
-# global-instruction text. Empty identity values are skipped (in CI the
-# git identity is usually unset, so only the fixed markers apply).
+# Patterns: $USER (record.sh rewrites it to "user", so a hit means the
+# redaction missed), plus fixed markers for hook output and
+# global-instruction text. The owner's git name and email are public in
+# every commit, so they are not patterns.
 #
 # Prints "<file>: <pattern-name>" per hit — never the matched text, so
 # the output itself cannot leak — and exits 1 when any hit is found,
@@ -28,8 +28,6 @@ names=()
 patterns=()
 add() { [ -n "${2:-}" ] && { names+=("$1"); patterns+=("$2"); } ; }
 add "user-login" "${USER:-}"
-add "git-user.name" "$(git config user.name 2>/dev/null || true)"
-add "git-user.email" "$(git config user.email 2>/dev/null || true)"
 for m in PONYTAIL QuotaBar 'Global instructions' 'commit freely' mcp__claude_ai Gmail; do
   names+=("marker:$m")
   patterns+=("$m")

@@ -58,9 +58,7 @@ done
 # is deleted and recording fails: a fixture quoting a pattern is not
 # committed (no allowlist). The scan prints pattern names only, never
 # matched text.
-# NOTE: record.sh cd's into the recording cwd above, so run the scan from
-# the repo root: the identity patterns come from this repo's git config.
-leaks="$(cd "$here/.." && "$here/leak-scan.sh" "$out/$name.stdout" "$out/$name.stderr" "$out/$name.argv" 2>&1)" || {
+leaks="$("$here/leak-scan.sh" "$out/$name.stdout" "$out/$name.stderr" "$out/$name.argv" 2>&1)" || {
   [ -n "$leaks" ] && printf '%s\n' "$leaks" >&2
   rm -f "$out/$name".{stdout,stderr,argv}
   echo "record.sh: leak-scan hit, fixture deleted" >&2

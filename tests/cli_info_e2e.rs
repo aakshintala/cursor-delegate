@@ -36,11 +36,16 @@ fn pi_script(fail_model: Option<&str>) -> String {
             format!("case \"$*\" in *{m}*) echo \"no such model\" >&2; exit 1 ;; esac\nexit 0")
         }
     };
+    // --list-models answers every query with the full bundled pi table; the
+    // doctor matches provider/model exactly (and thinking yes for :suffixed
+    // ids), so every bundled model resolves.
+    let list = "provider model context max-out thinking images\nopenai-codex gpt-6-astra 272K 128K yes yes\nopenai-codex gpt-6-luna 272K 128K yes yes\nopenai-codex gpt-6.1-sol 272K 128K yes yes\nopencode-go muse-spark-1.3-contributor 1.1M 128K yes yes\nopencode-go glm-5.3-flash 1.1M 128K yes yes\nopencode-go deepseek-v4.1-flash 1.1M 128K yes yes";
     format!(
         r#"#!/bin/sh
 case "$1" in
   --version) echo "0.99.2" ;;
   auth) {auth} ;;
+  --list-models) printf '%s\n' "{list}" ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
 "#

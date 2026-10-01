@@ -23,19 +23,8 @@ pub(crate) struct RawCursorJson {
         deserialize_with = "crate::util::lenient"
     )]
     pub cost_usd: Option<f64>,
-    #[serde(default, deserialize_with = "lenient_values")]
+    #[serde(default)]
     pub permission_denials: Vec<Value>,
-}
-
-fn lenient_values<'de, D>(d: D) -> Result<Vec<Value>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let v = Value::deserialize(d)?;
-    Ok(match v {
-        Value::Array(items) => items,
-        _ => Vec::new(),
-    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

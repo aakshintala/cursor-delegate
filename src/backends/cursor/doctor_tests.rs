@@ -382,7 +382,8 @@ fn run_doctor_checks_pi_auth_and_ignores_claude() {
     assert!(report.ok);
     assert!(report.model_menu.missing_from_account.is_empty());
     assert!(report.warnings.is_empty());
-    // pi ran its per-model auth check; claude is still unimplemented.
+    // pi ran its per-model auth check. Claude skips this resolve_bin seam
+    // (it would otherwise probe cursor-agent).
     assert!(report.sections.iter().any(|s| s.backend == "pi"));
     assert!(!report.sections.iter().any(|s| s.backend == "claude"));
 }

@@ -58,9 +58,16 @@ pub(crate) fn argv(
     (args, is_write)
 }
 
-/// Same child driver as cursor: the shared parser reads both stream-json dialects.
+/// Same child driver as cursor. The id minted in [`argv`] is kept when the
+/// stream never sends one, so a cancelled run can resume.
 pub(crate) fn spawn(spec: &JobSpec) -> Spawned {
-    super::cursor::spawn(spec)
+    super::cursor::spawn_with_session(spec, session_from_argv(&spec.argv))
+}
+
+fn session_from_argv(argv: &[String]) -> Option<String> {
+    argv.windows(2)
+        .find(|w| w[0] == "--session-id" || w[0] == "--resume")
+        .map(|w| w[1].clone())
 }
 
 #[cfg(test)]
@@ -74,17 +81,6 @@ mod tests {
     use crate::finalize::{default_finalize_ctx, finalize_run};
     use crate::stream::{init_stream_state, parse_line};
     use crate::types::{RunStatus, Usage};
-
-    fn is_uuid(s: &str) -> bool {
-        let p: Vec<&str> = s.split('-').collect();
-        p.len() == 5
-            && p[0].len() == 8
-            && p[1].len() == 4
-            && p[2].len() == 4
-            && p[3].len() == 4
-            && p[4].len() == 12
-            && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
-    }
 
     #[test]
     fn plan_is_read_only_and_auto_is_write() {
@@ -104,7 +100,11 @@ mod tests {
             ]
         );
         assert_eq!(ask[8], "--session-id");
-        assert!(is_uuid(&ask[9]), "{}", ask[9]);
+        assert!(
+            ask[9].len() == 36 && ask[9].chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+            "{}",
+            ask[9]
+        );
         assert_eq!(&ask[10..], &["--".to_string(), "hi".to_string()]);
         assert!(!ask.iter().any(|a| a.contains("disallowedTools")));
 
@@ -179,6 +179,12 @@ mod tests {
             assert!(res.usage.is_some(), "{stem}");
             assert!(res.cost_usd.is_some(), "{stem}");
             assert!(!res.text.is_empty(), "{stem}");
+            if stem.starts_with("auto-refusal") {
+                // #6 recorded no refusal: the model declined in prose, permission_denials stayed empty.
+                assert_eq!(res.is_error, Some(false), "{stem}");
+                assert!(res.permission_denials.is_empty(), "{stem}");
+                assert!(!res.text.is_empty(), "{stem}");
+            }
             if stem == "error-bad-model" {
                 // subtype is "success"; is_error is what counts.
                 assert_eq!(res.is_error, Some(true), "{stem}");

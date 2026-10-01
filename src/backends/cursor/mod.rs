@@ -64,6 +64,12 @@ pub(crate) fn argv(
 }
 
 pub(crate) fn spawn(spec: &JobSpec) -> Spawned {
+    spawn_with_session(spec, None)
+}
+
+/// `launched_session` is an id chosen before launch. The stream's own id wins;
+/// this fills in when the child dies before a result line (cancel).
+pub(crate) fn spawn_with_session(spec: &JobSpec, launched_session: Option<String>) -> Spawned {
     let started = match super::start_child(spec) {
         Ok(s) => s,
         Err(msg) => return super::spawn_failed(&msg),
@@ -95,6 +101,7 @@ pub(crate) fn spawn(spec: &JobSpec) -> Spawned {
                 pumped.clean_exit,
                 &pumped.stderr,
                 !pumped.saw_stdout,
+                launched_session.as_deref(),
             )
         }),
     }
@@ -107,7 +114,7 @@ pub fn parse_stdout(stdout: &str, clean_exit: bool, stderr: &str) -> BackendResu
     for line in stdout.split_inclusive('\n') {
         handle_line(line.as_bytes(), &mut state, &mut raw, &|_: Event| {});
     }
-    finish(raw, clean_exit, stderr, stdout.is_empty())
+    finish(raw, clean_exit, stderr, stdout.is_empty(), None)
 }
 
 fn handle_line(
@@ -137,11 +144,13 @@ fn finish(
     clean_exit: bool,
     stderr: &str,
     stdout_empty: bool,
+    launched_session: Option<&str>,
 ) -> BackendResult {
+    let launched = || launched_session.map(str::to_string);
     if let Some(raw) = raw {
         return BackendResult {
             text: raw.result.unwrap_or_default(),
-            session_id: raw.session_id,
+            session_id: raw.session_id.or_else(launched),
             usage: raw.usage,
             cost_usd: raw.cost_usd,
             is_error: raw.is_error,
@@ -161,6 +170,7 @@ fn finish(
     };
     BackendResult {
         text,
+        session_id: launched(),
         is_error: Some(true),
         clean_exit,
         stderr: stderr.to_string(),
@@ -191,6 +201,7 @@ mod tests {
             pumped.clean_exit,
             &pumped.stderr,
             !pumped.saw_stdout,
+            None,
         )
     }
 

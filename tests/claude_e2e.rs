@@ -156,12 +156,13 @@ fn run_watch_resume_and_plan_argv() {
 }
 
 #[test]
-fn cancel_kills_a_held_fake() {
+fn cancel_then_resume_reuses_the_launch_session() {
     let e = Env::new("cancel");
     e.hold();
     let id = e.ok(&["run", "--model", "claude-sonnet-5-5"], "hold");
     until("agent.pid", || e.dir.join("agent.pid").exists());
     assert_eq!(e.record(&id)["status"], "RUNNING");
+    let sid = argv_flag(&e.argv_text(), "--session-id");
     let out = e.delegate(&["cancel", &id], None);
     assert_eq!(
         out.status.code(),
@@ -172,5 +173,23 @@ fn cancel_kills_a_held_fake() {
     let rec: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(rec["status"], "CANCELLED");
     assert_eq!(rec["result"]["status"], "CANCELLED");
+    assert_eq!(rec["resume"]["sessionId"], sid.as_str());
     assert_eq!(e.record(&id)["status"], "CANCELLED");
+
+    // The fifo would hold the resumed fake too. The cancelled agent is already dead.
+    let _ = std::fs::remove_file(e.dir.join("release"));
+    let next = e.ok(&["resume", &id], "continue");
+    let done = e.wait_terminal(&next);
+    assert_eq!(done["status"], "DONE");
+    assert_eq!(argv_flag(&e.argv_text(), "--resume"), sid);
+}
+
+/// Flag values are one argv element per line (`printf '%s\n'`).
+fn argv_flag(argv: &str, flag: &str) -> String {
+    let lines: Vec<&str> = argv.lines().collect();
+    lines
+        .windows(2)
+        .find(|w| w[0] == flag)
+        .unwrap_or_else(|| panic!("no {flag} in {argv}"))[1]
+        .to_string()
 }

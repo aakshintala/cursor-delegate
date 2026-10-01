@@ -130,63 +130,22 @@ fn probe_login(run: &dyn Fn(&[String]) -> AgentCommandResult) -> (bool, Option<S
     }
 }
 
+#[derive(serde::Deserialize)]
+struct AuthStatus {
+    #[serde(rename = "loggedIn")]
+    logged_in: bool,
+}
+
 fn logged_in_flag(stdout: &str) -> Result<bool, String> {
-    for candidate in stdout.lines().chain(std::iter::once(stdout.trim())) {
-        let candidate = candidate.trim();
-        if candidate.is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) else {
-            continue;
-        };
-        if let Some(b) = v.get("loggedIn").and_then(|x| x.as_bool()) {
-            return Ok(b);
-        }
-    }
-    Err("auth status missing loggedIn".into())
+    serde_json::from_str::<AuthStatus>(stdout.trim())
+        .map(|s| s.logged_in)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{
-        Config, DoctorAccountInfo, DoctorAgentInfo, DoctorClaudeInfo, DoctorModelMenuInfo,
-        DoctorPluginInfo, HostProfile,
-    };
-
-    fn blank() -> DoctorReport {
-        DoctorReport {
-            ok: false,
-            plugin: DoctorPluginInfo {
-                version: "0".into(),
-            },
-            agent: DoctorAgentInfo {
-                found: false,
-                path: None,
-                version: None,
-                error: None,
-            },
-            account: DoctorAccountInfo {
-                logged_in: false,
-                email: None,
-                subscription: None,
-                current_model: None,
-                error: None,
-            },
-            model_menu: DoctorModelMenuInfo {
-                configured_ids: vec![],
-                account_ids: None,
-                missing_from_account: vec![],
-                prices_checkable: false,
-                note: String::new(),
-                error: None,
-            },
-            warnings: vec![],
-            failures: vec![],
-            sections: vec![],
-            claude: None,
-        }
-    }
+    use crate::types::{Config, DoctorClaudeInfo, DoctorReport, HostProfile};
 
     fn cfg() -> Config {
         Config {
@@ -208,15 +167,17 @@ mod tests {
 
     #[test]
     fn logged_in_false_is_a_fail_line() {
-        let mut report = blank();
-        report.claude = Some(DoctorClaudeInfo {
-            found: true,
-            path: Some("/fake/claude".into()),
-            version: Some("1.2.3".into()),
-            version_error: None,
-            logged_in: false,
-            login_error: Some("loggedIn is false".into()),
-        });
+        let report = DoctorReport {
+            claude: Some(DoctorClaudeInfo {
+                found: true,
+                path: Some("/fake/claude".into()),
+                version: Some("1.2.3".into()),
+                version_error: None,
+                logged_in: false,
+                login_error: Some("loggedIn is false".into()),
+            }),
+            ..Default::default()
+        };
         let (text, failed) = lines(&report);
         assert!(failed);
         assert!(
@@ -246,7 +207,7 @@ mod tests {
                 other => panic!("unexpected {other}"),
             }
         };
-        let mut report = blank();
+        let mut report = DoctorReport::default();
         fill(
             &mut report,
             &RunDoctorOpts {
@@ -273,7 +234,7 @@ mod tests {
                 other => panic!("unexpected {other}"),
             }
         };
-        let mut report = blank();
+        let mut report = DoctorReport::default();
         fill(
             &mut report,
             &RunDoctorOpts {
@@ -292,7 +253,7 @@ mod tests {
                 .any(|f| f.to_lowercase().contains("not logged in"))
         );
 
-        let mut report = blank();
+        let mut report = DoctorReport::default();
         fill(
             &mut report,
             &RunDoctorOpts {

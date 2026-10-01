@@ -98,7 +98,6 @@ fn denial_names(denials: &[serde_json::Value]) -> String {
         .iter()
         .map(|d| {
             d.get("tool_name")
-                .or_else(|| d.get("toolName"))
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .unwrap_or("unknown")

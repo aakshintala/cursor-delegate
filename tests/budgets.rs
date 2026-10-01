@@ -42,15 +42,7 @@ User Email          alice@example.com";
 
 const FULL_LIST: &str = "composer-2.5 grok-4.7-high grok-4.7-xhigh";
 
-const CLAUDE_FAKE: &str = r#"#!/bin/sh
-case "$1" in
-  --version) echo "2.0.0-test" ;;
-  auth)
-    if [ "$2" = status ]; then printf '%s\n' '{"loggedIn":true}'; else exit 1; fi
-    ;;
-  *) exit 1 ;;
-esac
-"#;
+const CLAUDE_FAKE: &str = include_str!("support/claude_fake.sh");
 
 fn info_agent_script() -> String {
     format!(
@@ -77,7 +69,7 @@ const RUN_BUDGET_MS: u128 = 102; // measured: 34ms on M-series Mac, budget 3x
 const RESUME_BUDGET_MS: u128 = 93; // measured: 31ms on M-series Mac, budget 3x
 const CANCEL_BUDGET_MS: u128 = 192; // measured: 64ms on M-series Mac, budget 3x
 const WATCH_BUDGET_MS: u128 = 50; // measured: 2ms on M-series Mac; 50ms floor, since 3x a spawn-dominated time flakes on CI
-const DOCTOR_BUDGET_MS: u128 = 2500; // measured ~400ms with claude probes; floor, since 3x flakes under load (same reason as watch)
+const DOCTOR_BUDGET_MS: u128 = 44; // measured max 29ms over 5 local `cargo test --test budgets` runs, ~1.5x
 const MODELS_BUDGET_MS: u128 = 50; // measured: 2ms on M-series Mac; 50ms floor, since 3x a spawn-dominated time flakes on CI
 const SUPERVISOR_RSS_BUDGET_KB: u64 = 8736; // measured: 2912KB on M-series Mac, budget 3x
 

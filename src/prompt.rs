@@ -20,7 +20,7 @@ mod tests {
     fn record_sh_reads_status_instruction_file() {
         const RECORD_SH: &str = include_str!("../scripts/record.sh");
         assert!(
-            RECORD_SH.contains("status_instruction.txt"),
+            RECORD_SH.contains(r#"cat "$here/../src/status_instruction.txt""#),
             "scripts/record.sh must read src/status_instruction.txt"
         );
     }

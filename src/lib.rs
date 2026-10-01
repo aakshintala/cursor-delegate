@@ -15,6 +15,7 @@ pub mod git;
 pub mod index;
 pub mod isolation;
 pub mod job_registry;
+pub mod lock;
 pub mod models;
 pub mod output;
 pub mod pricing;

@@ -1,4 +1,4 @@
-use crate::types::PollResult;
+use crate::types::{JobStatus, PollResult, RunOutput, RunStatus};
 use crate::util::{json_compact, random_uuid};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,6 +57,9 @@ pub struct CliResume {
     pub cwd: String,
     pub capability: &'static str,
     pub session_id: Option<String>,
+    pub gate: String,
+    #[serde(serialize_with = "crate::util::js_num_opt")]
+    pub tool_idle_ms: Option<f64>,
 }
 
 /// `PollResult` plus what a watcher needs to find and resume the job.
@@ -71,12 +74,14 @@ pub struct CliRecord {
 
 /// Writes the CLI record for the one job this supervisor runs. A failed write exits the
 /// supervisor: the file is the only truth, so a job that cannot report is not worth running.
-/// ponytail: the cursor-agent child is orphaned on that exit; supervisor death handling is #9.
+/// ponytail: the cursor-agent child is orphaned on that exit; `watch` reports the dead supervisor.
 pub struct CliRecordWriter {
     pub job_id: String,
     pub model: String,
     pub cwd: String,
     pub capability: &'static str,
+    pub gate: String,
+    pub tool_idle_ms: Option<f64>,
 }
 
 impl StatusRecordWriter for CliRecordWriter {
@@ -96,6 +101,8 @@ impl StatusRecordWriter for CliRecordWriter {
                 cwd: self.cwd.clone(),
                 capability: self.capability,
                 session_id,
+                gate: self.gate.clone(),
+                tool_idle_ms: self.tool_idle_ms,
             },
         };
         let path = cli_record_path(&self.job_id);
@@ -105,4 +112,50 @@ impl StatusRecordWriter for CliRecordWriter {
             std::process::exit(1);
         }
     }
+}
+
+/// A RUNNING record whose supervisor is gone. Keeps resume so a later command can still
+/// see what the job was; the result text is the whole reason.
+pub fn write_supervisor_died(job_id: &str, prior: &serde_json::Value) -> std::io::Result<()> {
+    let resume_in = &prior["resume"];
+    let capability = if resume_in["capability"] == "read-write" {
+        "read-write"
+    } else {
+        "read-only"
+    };
+    let session_id = resume_in["sessionId"].as_str().map(str::to_string);
+    let model = resume_in["model"].as_str().unwrap_or("").to_string();
+    let rec = CliRecord {
+        poll: PollResult::Terminal {
+            status: JobStatus::Error,
+            result: RunOutput {
+                status: RunStatus::Error,
+                text: "supervisor died".into(),
+                session_id: session_id.clone(),
+                backend: "cursor".into(),
+                model: model.clone(),
+                usage: None,
+                cost_usd: None,
+                cost_estimated: false,
+                duration_ms: None,
+                job_id: Some(job_id.to_string()),
+                downgraded: None,
+                stderr_tail: None,
+                gate_result: None,
+                change_set: None,
+                concerns: None,
+            },
+            superseded_by: None,
+        },
+        supervisor_pid: prior["supervisorPid"].as_u64().unwrap_or(0) as u32,
+        resume: CliResume {
+            model,
+            cwd: resume_in["cwd"].as_str().unwrap_or("").to_string(),
+            capability,
+            session_id,
+            gate: resume_in["gate"].as_str().unwrap_or("").to_string(),
+            tool_idle_ms: resume_in["toolIdleMs"].as_f64(),
+        },
+    };
+    write_atomic(&cli_record_path(job_id), &json_compact(&rec))
 }

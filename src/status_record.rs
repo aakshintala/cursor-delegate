@@ -22,7 +22,7 @@ impl StatusRecordWriter for FileStatusRecordWriter {
 }
 
 /// Write to a unique tmp sibling, then rename over `path`, so readers never see a partial file.
-fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(".{}.tmp", random_uuid()));
@@ -62,7 +62,11 @@ pub struct CliResume {
     pub tool_idle_ms: Option<f64>,
 }
 
-/// `PollResult` plus what a watcher needs to find and resume the job.
+/// `PollResult` plus what a watcher needs to find and resume the job, plus the resume
+/// chain links: `resumedFrom` (this job continues that one) and `supersededBy` (written
+/// into the old record once the new job is spawned). The flattened `poll` already carries
+/// `supersededBy` when the registry set it; the file rewrite for a long-gone supervisor
+/// inserts the same top-level key.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliRecord {
@@ -70,6 +74,8 @@ pub struct CliRecord {
     pub poll: PollResult,
     pub supervisor_pid: u32,
     pub resume: CliResume,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumed_from: Option<String>,
 }
 
 /// Writes the CLI record for the one job this supervisor runs. A failed write exits the
@@ -82,6 +88,7 @@ pub struct CliRecordWriter {
     pub capability: &'static str,
     pub gate: String,
     pub tool_idle_ms: Option<f64>,
+    pub resumed_from: Option<String>,
 }
 
 impl StatusRecordWriter for CliRecordWriter {
@@ -104,6 +111,7 @@ impl StatusRecordWriter for CliRecordWriter {
                 gate: self.gate.clone(),
                 tool_idle_ms: self.tool_idle_ms,
             },
+            resumed_from: self.resumed_from.clone(),
         };
         let path = cli_record_path(&self.job_id);
         let res = write_atomic(&path, &json_compact(&rec));
@@ -141,4 +149,50 @@ pub fn write_supervisor_died(job_id: &str, prior: &serde_json::Value) -> std::io
         }),
     );
     write_atomic(&cli_record_path(job_id), &json_compact(&rec))
+}
+
+/// A RUNNING record whose supervisor had to be SIGKILLed: nobody is left to finalize, so
+/// `cancel` writes the CANCELLED terminal record itself. Keeps the resume block (minus the
+/// session, which never produced a result), the supervisor pid and any chain links.
+pub fn write_cancelled(job_id: &str, prior: &serde_json::Value) -> std::io::Result<()> {
+    let resume = prior.get("resume").cloned().unwrap_or(serde_json::json!({
+        "model": "",
+        "cwd": "",
+        "capability": "read-only",
+        "sessionId": null,
+        "gate": "",
+        "toolIdleMs": null,
+    }));
+    let model = resume.get("model").and_then(|m| m.as_str()).unwrap_or("");
+    let mut obj = serde_json::Map::new();
+    obj.insert("status".into(), "CANCELLED".into());
+    obj.insert(
+        "result".into(),
+        serde_json::json!({
+            "status": "CANCELLED",
+            "text": "Cancelled by user.",
+            "sessionId": null,
+            "backend": "cursor",
+            "model": model,
+            "usage": null,
+            "costUsd": null,
+            "costEstimated": true,
+            "durationMs": null,
+            "jobId": job_id,
+        }),
+    );
+    obj.insert(
+        "supervisorPid".into(),
+        prior.get("supervisorPid").cloned().unwrap_or_default(),
+    );
+    obj.insert("resume".into(), resume);
+    for key in ["resumedFrom", "supersededBy"] {
+        if let Some(v) = prior.get(key) {
+            obj.insert(key.into(), v.clone());
+        }
+    }
+    write_atomic(
+        &cli_record_path(job_id),
+        &json_compact(&serde_json::Value::Object(obj)),
+    )
 }

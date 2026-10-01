@@ -43,12 +43,12 @@ cd "$cwd" || exit 2
 [ "$backend" = cursor ] && argv+=(-- "$prompt") && prompt=
 "${argv[@]}" < <(printf '%s' "$prompt") > "$out/$name.stdout" 2> "$out/$name.stderr" &
 pid=$!
-[ -n "${CANCEL_AFTER:-}" ] && sleep "$CANCEL_AFTER" && kill -TERM "$pid"
+[ -n "${CANCEL_AFTER:-}" ] && sleep "$CANCEL_AFTER" && kill -TERM "$pid" 2>/dev/null
 wait "$pid"
 code=$?
 # Redact the user's setup (see redact.jq) and home-directory name; non-JSON lines pass through.
 for f in "$out/$name".{stdout,stderr,argv}; do
-  jq -rR -L "$here" 'include "redact"; (fromjson? | redact | tojson) // .' "$f" | sed "s/$USER/user/g" > "$f.tmp" && mv "$f.tmp" "$f"
+  jq -rR -L "$here" 'include "redact"; (fromjson? | redact | tojson) // .' "$f" | sed "s/${USER:?}/user/g" > "$f.tmp" && mv "$f.tmp" "$f"
 done
 echo "session=$session exit=$code fixture=$out/$name.stdout"
 exit $code

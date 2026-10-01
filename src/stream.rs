@@ -36,20 +36,12 @@ fn path_from_args(args: Option<&Value>) -> Option<String> {
     None
 }
 
-fn external_tool_call_field() -> &'static str {
-    concat!("mc", "pToolCall")
-}
-
-fn external_tool_default_name() -> &'static str {
-    concat!("mc", "p")
-}
-
 fn extract_tool(tc: &Value) -> (Option<String>, Option<String>) {
-    if let Some(call) = tc.get(external_tool_call_field()) {
-        let tool = call
+    if let Some(mcp) = tc.get("mcpToolCall") {
+        let tool = mcp
             .get("toolName")
             .and_then(|x| x.as_str())
-            .unwrap_or(external_tool_default_name())
+            .unwrap_or("mcp")
             .to_string();
         return (Some(tool), None);
     }
@@ -238,13 +230,12 @@ mod tests {
     }
 
     #[test]
-    fn external_tool_call_uses_tool_name() {
+    fn mcp_tool_call_uses_tool_name() {
         let mut s = init_stream_state();
-        let key = super::external_tool_call_field();
         parse_line(
             &json!({
                 "type":"tool_call","subtype":"started",
-                "tool_call":{(key):{"toolName":"search"}}
+                "tool_call":{"mcpToolCall":{"toolName":"search"}}
             })
             .to_string(),
             &mut s,
@@ -254,15 +245,12 @@ mod tests {
         parse_line(
             &json!({
                 "type":"tool_call","subtype":"started",
-                "tool_call":{(key):{}}
+                "tool_call":{"mcpToolCall":{}}
             })
             .to_string(),
             &mut s2,
         );
-        assert_eq!(
-            s2.last_tool.as_deref(),
-            Some(super::external_tool_default_name())
-        );
+        assert_eq!(s2.last_tool.as_deref(), Some("mcp"));
     }
 
     #[test]

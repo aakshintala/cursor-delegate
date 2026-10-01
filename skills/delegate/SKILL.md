@@ -1,54 +1,46 @@
 ---
 name: delegate
 description: >
-  Delegate coding, research, plan-writing, or review work to other models through the
-  `delegate` CLI. Use for fanning work out, picking a model, writing a brief, waiting on
-  or reading a job, or answering a NEEDS_CONTEXT job with resume.
+  Run work on other models through the `delegate` CLI. Use when starting a delegated job,
+  picking a model, writing a brief, waiting on or reading a job, or answering a NEEDS_CONTEXT
+  job with resume.
 ---
 
 # Delegate
 
-You are the **orchestrator**. Run `delegate` (no arguments) for the command syntax, and
-`delegate models` for the live model table. Never review an agent's output with the model that
-produced it.
+Run `delegate` (no arguments) for the command syntax, and `delegate models` for the live model
+table with backends and prices.
 
-Only `cursor`, `pi`, and `claude` models run today. A `pi` model with `--capability read-only`
-is rejected (`pi cannot enforce read-only`, exit 2): pi runs need `read-write`.
+## Model tiers
 
-Plan mode's blocking of a writing Bash command is untested (#6), so don't rely on read-only Claude for anything a shell write could damage.
+Pick from the tier that fits the work, in this order of preference:
 
-## When to delegate
+| Tier | Work | Order |
+|---|---|---|
+| Read | exploration, fact-finding, research, triage | `composer-2.5` → `openai-codex/gpt-6-luna:medium` |
+| Work | most implementation and review | `opencode-go/muse-spark-1.3-contributor` → `claude-sonnet-5-5` → `openai-codex/gpt-6-luna:xhigh` |
+| Hard | hard work, and escalation after a Work model fails | `grok-4.7-xhigh` → `claude-opus-5-5` → `openai-codex/gpt-6.1-sol` |
 
-Delegate token-heavy plan writing (you hold the approved spec), mechanical or well-scoped
-coding, uncorrelated review, and bulk triage or summarising. Keep the product decision, and any
-edit the user wants to watch, for yourself.
+A provider's **headroom** is its remaining quota on its tightest window (session, weekly or
+monthly). The providers are cursor (`composer-2.5`, `grok-*`), opencode-go (`opencode-go/*`),
+Anthropic (`claude-*`) and OpenAI (`openai-codex/*`).
 
-Size is no reason to skip it. A three-line edit goes through `delegate run --gate` too: the
-gate is what you are buying, and a hand edit skips it.
+- **Read** picks itself: the first model in the order whose provider has at least 20% headroom.
+- **Work and Hard:** once per session, propose one pick per tier to the owner with each
+  provider's headroom, and use the confirmed picks for the rest of the session. Ask again only
+  when quota shifts. When the owner is unavailable, use the last confirmed picks, step down the
+  tier order when a provider runs low, and report the switch.
+- Review an agent's output with a different model from the one that produced it.
 
-## Model picks
+## Briefs
 
-| Use | Model |
-|---|---|
-| Bulk, default | `composer-2.5` |
-| Hard work, plan writing | `grok-4.7-high`, `grok-4.7-xhigh` |
-| Cheap bulk (pi) | `opencode-go/muse-spark-1.3-contributor` |
-| Moderate | `claude-sonnet-5-5`, `claude-opus-5-5` |
-| Escalation only | `openai-codex/*` (pi) |
+Every brief carries exactly one of these lines, verbatim:
 
-## Roles
+- Worker: "Do not delegate further."
+- Sub-orchestrator: "You may delegate through `delegate`; workers you start must not delegate
+  further."
 
-Each role is a `delegate run` you construct; nothing is configured anywhere.
-
-| Role | Model | `--capability` | Prompt shape |
-|---|---|---|---|
-| Verifier | `grok-4.7-xhigh` | `read-only` | try to refute the claim, find the bug |
-| Triager | `composer-2.5` | `read-only` | classify, route, summarise |
-| Design-critic | `grok-4.7-high` | `read-only` | critique a design, surface risks |
-| Codemod | `composer-2.5` | `read-write` | mechanical edit across a tree |
-| Re-implementer | `grok-4.7-xhigh` | `read-write` | rebuild a component from a spec |
-| Implementer | `composer-2.5` | `read-write` | one planned task |
-| Spec / quality reviewer | not the implementer's model | `read-only` | review for gaps / quality |
+A brief without one is incomplete.
 
 ## Running
 
@@ -69,14 +61,19 @@ feeds a runner, the gate runs the runner. A gate that greps for a file is not a 
 stay on the same backend. It adds `supersededBy` to the old record, and exits 2 on a `RUNNING`
 job or a record with no session id (a `CANCELLED` one). Answer `NEEDS_CONTEXT` with it.
 
+pi models (`opencode-go/*`, `openai-codex/*`) need `--capability read-write`: pi cannot
+enforce `read-only`, so it exits 2. For read work on a pi model, the brief says not to edit.
+Claude plan mode's blocking of a writing Bash command is untested (#6), so don't rely on
+read-only Claude for anything a shell write could damage.
+
 `--tool-idle-ms` widens how long a running tool may stay silent before the idle watchdog
 kills the job (default 1800000, 30 min; a model silent between tools gets 300000). It also
 bounds the gate.
 
 ## Waiting
 
-Run this with `run_in_background: true`; it is the only way to wait. One notification arrives
-when every listed job is terminal, with their records on stdout:
+`watch` blocks until every listed job is terminal, then prints their records on stdout. It is
+the only way to wait; run it in the background the way your harness's instructions say.
 
 ```bash
 delegate watch <id-a> <id-b> --timeout 1800
@@ -115,25 +112,3 @@ killed it: rerun, with a larger `--tool-idle-ms` if it stalled inside a tool). `
 | 1 | `watch` timed out, or `doctor` hard failure |
 | 2 | bad input or unknown job |
 | 3 | BUSY: a read-write job already holds that cwd |
-
-## Briefs
-
-Every brief says "Do not delegate further." and states its goal, the files in scope, and the
-check that proves it done.
-
-**Verify your own brief before sending it.** Reviewing the diff cannot catch an error you
-wrote, because the diff matches the brief. Before writing "every caller passes X", run the
-search and read the surviving branch. Tell the delegate to confirm stated premises before
-acting on them.
-
-**When the report contradicts a premise you supplied, believe the delegate first.** Get
-evidence before overriding it: search for the symbol's callers, or `git log --diff-filter=D`
-for a vanished file. Reading the diff is not evidence.
-
-## Plan writing
-
-1. Fill every placeholder in `plan-writer-brief.md`; never send an unfilled template.
-2. `delegate run --model grok-4.7-xhigh --capability read-only < brief.md`, then `watch`. Use
-   `read-write` only when the delegate must land the plan in the repo.
-3. Answer `NEEDS_CONTEXT` with `delegate resume`.
-4. Review the plan yourself, then run a Verifier or Design-critic on a different model.

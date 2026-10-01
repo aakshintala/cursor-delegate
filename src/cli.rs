@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: delegate run --model M [--capability read-only|read-write] [--cwd D] [--prompt-file F]\n       delegate watch <jobId>... [--timeout S]";
+const USAGE: &str = "usage: delegate run --model M [--capability read-only|read-write] [--cwd D] [--prompt-file F]\n       delegate watch <jobId>... [--timeout S]\n       delegate models\n       delegate doctor";
 
 /// Bad input: reason on stderr, exit 2.
 struct Usage(String);
@@ -33,6 +33,8 @@ pub fn main() -> i32 {
     let res = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
         Some("watch") => watch(&args[1..]),
+        Some("models") => crate::cli_info::models().map_err(Usage),
+        Some("doctor") => crate::cli_info::doctor().map_err(Usage),
         Some("__supervise") => return supervise(&args[1..]),
         _ => usage(USAGE),
     };
@@ -93,13 +95,20 @@ fn run(args: &[String]) -> Result<i32, Usage> {
             return Ok(1);
         }
     };
-    if resolve_model(Some(model), false, &deps.config).is_err() {
-        let mut ids: Vec<_> = deps.config.models.keys().cloned().collect();
-        ids.sort();
-        return usage(format!(
-            "unknown model {model}; valid models: {}",
-            ids.join(", ")
-        ));
+    if let Err(e) = resolve_model(Some(model), false, &deps.config) {
+        // An unknown id lists the valid ids; any other failure (e.g. a model on
+        // a backend that is not implemented yet) prints the actual error.
+        if e.downcast_ref::<crate::models::ModelNotAllowedError>()
+            .is_some()
+        {
+            let mut ids: Vec<_> = deps.config.models.keys().cloned().collect();
+            ids.sort();
+            return usage(format!(
+                "unknown model {model}; valid models: {}",
+                ids.join(", ")
+            ));
+        }
+        return usage(format!("{e}"));
     }
     let mut prompt = String::new();
     match flag(&kv, "--prompt-file") {

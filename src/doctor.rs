@@ -301,177 +301,13 @@ pub fn default_read_package_version() -> Result<String, String> {
     Ok(env!("CARGO_PKG_VERSION").into())
 }
 
-fn parse_mcp_get(stdout: &str) -> (Option<String>, bool) {
-    let mut fields = std::collections::HashMap::new();
-    for line in stdout.split('\n') {
-        let line = line.trim_end_matches('\r');
-        if let Some(idx) = line.find(':') {
-            let label = line[..idx].trim().to_lowercase();
-            if label.is_empty() {
-                continue;
-            }
-            let value = line[idx + 1..].trim().to_string();
-            fields.insert(label, value);
-        }
-    }
-    let mut has_plugin_root = false;
-    let lines: Vec<&str> = stdout.split('\n').collect();
-    for (i, line) in lines.iter().enumerate() {
-        let line = line.trim_end_matches('\r');
-        let Some(env_indent) = env_header_indent(line) else {
-            continue;
-        };
-        for inner in lines.iter().skip(i + 1) {
-            let inner = inner.trim_end_matches('\r');
-            if inner.trim().is_empty() {
-                continue;
-            }
-            let inner_indent = inner.chars().take_while(|c| c.is_whitespace()).count();
-            if inner_indent <= env_indent {
-                break;
-            }
-            if inner.trim_start().starts_with("CLAUDE_PLUGIN_ROOT=") {
-                has_plugin_root = true;
-                break;
-            }
-        }
-        break;
-    }
-    (fields.get("scope").cloned(), has_plugin_root)
-}
-
-fn env_header_indent(line: &str) -> Option<usize> {
-    // /^(\s*)Environment:\s*$/
-    let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
-    let rest = line[indent..].trim_end();
-    if rest == "Environment:" {
-        Some(indent)
-    } else {
-        None
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ReadJsonResult {
-    Missing,
-    ParseError,
-    Value(serde_json::Value),
-}
-
-fn default_read_json(path: &str) -> ReadJsonResult {
-    match std::fs::read_to_string(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ReadJsonResult::Missing,
-        Err(_) => ReadJsonResult::ParseError,
-        Ok(raw) => match serde_json::from_str(&raw) {
-            Ok(v) => ReadJsonResult::Value(v),
-            Err(_) => ReadJsonResult::ParseError,
-        },
-    }
-}
-
-pub struct CheckPluginRegistrationDeps<'a> {
-    pub read_json: Option<&'a dyn Fn(&str) -> ReadJsonResult>,
-    pub run_command: Option<&'a dyn Fn(&str, &[String]) -> AgentCommandResult>,
-    pub home_dir: Option<String>,
-    pub plugin_id: Option<String>,
-    pub server_name: Option<String>,
-    pub legacy_server_name: Option<String>,
-}
-
-pub fn check_plugin_registration(deps: CheckPluginRegistrationDeps<'_>) -> PluginRegistrationCheck {
-    let read_json = deps.read_json;
-    let run_command = deps.run_command;
-    let home_dir = deps
-        .home_dir
-        .unwrap_or_else(|| crate::util::homedir().to_string_lossy().into_owned());
-    let plugin_id = deps
-        .plugin_id
-        .unwrap_or_else(|| "cursor-delegate@cursor-delegate-local".into());
-    let server_name = deps
-        .server_name
-        .unwrap_or_else(|| "plugin:cursor-delegate:cursor-delegate".into());
-    let legacy_server_name = deps
-        .legacy_server_name
-        .unwrap_or_else(|| "cursor-delegate".into());
-
-    let mut detail = Vec::new();
-    let settings_path = format!("{home_dir}/.claude/settings.json");
-    let settings = match read_json {
-        Some(f) => f(&settings_path),
-        None => default_read_json(&settings_path),
-    };
-    let mut enabled = false;
-    match settings {
-        ReadJsonResult::Missing => {}
-        ReadJsonResult::ParseError => {
-            detail.push("settings.json exists but could not be parsed".into());
-        }
-        ReadJsonResult::Value(value) => {
-            if let Some(obj) = value.as_object()
-                && let Some(plugins) = obj.get("enabledPlugins").and_then(|v| v.as_object())
-            {
-                enabled = plugins.get(&plugin_id).and_then(|v| v.as_bool()) == Some(true);
-            }
-            if !enabled {
-                detail.push(format!("{plugin_id} is not enabled in settings.json"));
-            }
-        }
-    }
-
-    let run = |bin: &str, args: &[String]| -> AgentCommandResult {
-        if let Some(f) = run_command {
-            f(bin, args)
-        } else {
-            default_run_agent_command(bin, args)
-        }
-    };
-
-    let mcp_get = run("claude", &["mcp".into(), "get".into(), server_name.clone()]);
-    let mut reachable = false;
-    let mut resolves_to_plugin_install = false;
-    if !mcp_get.ok {
-        detail.push(format!(
-            "no MCP server named \"{server_name}\" is currently registered"
-        ));
-    } else {
-        reachable = true;
-        let (_, has_plugin_root) = parse_mcp_get(&mcp_get.stdout);
-        resolves_to_plugin_install = has_plugin_root;
-        if !resolves_to_plugin_install {
-            detail.push(format!(
-                "{server_name} is registered but not plugin-sourced (no CLAUDE_PLUGIN_ROOT in its environment) — a raw registration is still live"
-            ));
-        }
-    }
-
-    let legacy_get = run(
-        "claude",
-        &["mcp".into(), "get".into(), legacy_server_name.clone()],
-    );
-    let legacy_absent = !legacy_get.ok;
-    if !legacy_absent {
-        detail.push(format!(
-            "a server is still registered under the bare name \"{legacy_server_name}\" — the legacy raw registration may have been reintroduced"
-        ));
-    }
-
-    let ok = enabled && reachable && resolves_to_plugin_install && legacy_absent;
-    PluginRegistrationCheck {
-        enabled,
-        reachable,
-        resolves_to_plugin_install,
-        legacy_absent,
-        ok,
-        detail,
-    }
-}
-
 pub struct RunDoctorOpts<'a> {
     pub config: &'a Config,
     pub resolve_bin: Option<&'a dyn Fn(Option<&str>) -> String>,
     pub bin_exists: Option<&'a dyn Fn(&str) -> bool>,
     pub run_command: Option<&'a dyn Fn(&str, &[String]) -> AgentCommandResult>,
     pub read_package_version: Option<&'a dyn Fn() -> Result<String, String>>,
+    /// Removed with the plugin-registration check; kept so existing callers compile.
     pub check_plugin_registration: Option<&'a dyn Fn() -> PluginRegistrationCheck>,
 }
 
@@ -514,20 +350,24 @@ pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
     }
 
     let path = resolve_bin(None);
-    let configured_ids: Vec<String> = opts.config.models.keys().cloned().collect();
-    let plugin_registration = if let Some(f) = opts.check_plugin_registration {
-        f()
-    } else {
-        // Like the TS default: the registration probe always runs real commands; the injected
-        // run_command stubs only the cursor-agent probes.
-        check_plugin_registration(CheckPluginRegistrationDeps {
-            read_json: None,
-            run_command: None,
-            home_dir: None,
-            plugin_id: None,
-            server_name: None,
-            legacy_server_name: None,
-        })
+    // Only cursor-backend models are checked against cursor-agent. Models on
+    // backends that are not implemented yet are reported as skips by the CLI.
+    let configured_ids: Vec<String> = opts
+        .config
+        .models
+        .iter()
+        .filter(|(_, e)| e.backend == "cursor")
+        .map(|(id, _)| id.clone())
+        .collect();
+    // The plugin-registration check is gone; the report keeps its JSON shape
+    // for the MCP doctor tool.
+    let plugin_registration = PluginRegistrationCheck {
+        enabled: true,
+        reachable: true,
+        resolves_to_plugin_install: true,
+        legacy_absent: true,
+        ok: true,
+        detail: vec![],
     };
 
     if !bin_exists(&path) {

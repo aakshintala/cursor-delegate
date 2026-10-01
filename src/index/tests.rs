@@ -13,7 +13,7 @@ fn config() -> Config {
         "composer-2.5".into(),
         ModelEntry {
             label: "Composer 2.5".into(),
-            family: "composer".into(),
+            backend: "cursor".into(),
             price: Price {
                 input: 0.5,
                 output: 2.5,

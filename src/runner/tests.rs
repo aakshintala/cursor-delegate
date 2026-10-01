@@ -25,23 +25,23 @@ fn config() -> Config {
         "composer-2.5".into(),
         ModelEntry {
             label: "Composer 2.5".into(),
-            family: "composer".into(),
+            backend: "cursor".into(),
             price: price(0.5, 2.5, 0.2, 0.0),
         },
     );
     models.insert(
-        "grok-4.5-xhigh".into(),
+        "grok-4.7-high".into(),
         ModelEntry {
-            label: "Grok 4.5".into(),
-            family: "grok".into(),
+            label: "Grok 4.7 High".into(),
+            backend: "cursor".into(),
             price: price(2.0, 6.0, 0.5, 0.0),
         },
     );
     models.insert(
-        "claude-sonnet-4".into(),
+        "claude-sonnet-5-5".into(),
         ModelEntry {
-            label: "Claude Sonnet 4".into(),
-            family: "claude".into(),
+            label: "Claude Sonnet 5.5".into(),
+            backend: "claude".into(),
             price: price(3.0, 15.0, 0.3, 0.0),
         },
     );
@@ -298,7 +298,7 @@ fn require_non_claude_throws() {
     let e = run_delegation(
         RunInput {
             prompt: "x".into(),
-            model: Some("claude-sonnet-4".into()),
+            model: Some("claude-sonnet-5-5".into()),
             require_non_claude: Some(true),
             ..Default::default()
         },
@@ -427,7 +427,7 @@ fn resume_context_captures() {
     run_delegation(
         RunInput {
             prompt: "plan it".into(),
-            model: Some("grok-4.5-xhigh".into()),
+            model: Some("grok-4.7-high".into()),
             require_non_claude: Some(true),
             capability: Some(Capability::Plan),
             isolation: Some(Isolation::CallerProvided {
@@ -446,7 +446,7 @@ fn resume_context_captures() {
     assert_eq!(
         ctx,
         ResumeContext {
-            model: "grok-4.5-xhigh".into(),
+            model: "grok-4.7-high".into(),
             require_non_claude: Some(true),
             capability: Capability::Plan,
             allow_unsandboxed: false,
@@ -485,7 +485,7 @@ fn resume_context_defaults() {
 
 fn parked_ctx() -> ResumeContext {
     ResumeContext {
-        model: "grok-4.5-xhigh".into(),
+        model: "grok-4.7-high".into(),
         require_non_claude: Some(true),
         capability: Capability::Write,
         allow_unsandboxed: false,
@@ -529,7 +529,7 @@ fn answer_resumes_with_context() {
     let i = spec.argv.iter().position(|s| s == "--resume").unwrap();
     assert_eq!(spec.argv[i + 1], "sess-9");
     assert!(spec.argv.last().unwrap().contains("use v2"));
-    assert_eq!(spec.model, "grok-4.5-xhigh");
+    assert_eq!(spec.model, "grok-4.7-high");
     assert!(spec.is_write);
     assert_eq!(spec.cwd, "/repo");
     assert_eq!(spec.path.as_deref(), Some("/repo"));

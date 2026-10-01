@@ -251,14 +251,14 @@ pub type PriceMap = std::collections::HashMap<String, Price>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub label: String,
-    pub family: String,
+    pub backend: String,
     pub price: Price,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedModel {
     pub model: String,
-    pub family: String,
+    pub backend: String,
     pub price: Price,
 }
 

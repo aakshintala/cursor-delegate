@@ -166,7 +166,7 @@ fn decode_model_entry(raw: &Value, id: &str, where_: &str) -> Result<ModelEntry,
     let loc = format!("{where_}[\"{id}\"]");
     Ok(ModelEntry {
         label: str_field(obj, "label", &loc)?,
-        family: str_field(obj, "family", &loc)?,
+        backend: str_field(obj, "backend", &loc)?,
         price: decode_price(obj.get("price").unwrap_or(&Value::Null), &loc)?,
     })
 }
@@ -346,12 +346,12 @@ mod tests {
   "models": {
     "composer-2.5": {
       "label": "Composer 2.5",
-      "family": "composer",
+      "backend": "cursor",
       "price": { "input": 0.5, "output": 2.5, "cacheRead": 0.2, "cacheWrite": 0 }
     },
-    "grok-4.5-xhigh": {
-      "label": "Grok 4.5",
-      "family": "grok",
+    "grok-4.7-high": {
+      "label": "Grok 4.7 High",
+      "backend": "cursor",
       "price": { "input": 2, "output": 6, "cacheRead": 0.5, "cacheWrite": 0 }
     }
   }
@@ -378,7 +378,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(cfg.default, "composer-2.5");
-        assert_eq!(cfg.models["composer-2.5"].family, "composer");
+        assert_eq!(cfg.models["composer-2.5"].backend, "cursor");
         assert_eq!(cfg.price_map["composer-2.5"].input, 0.5);
         assert_eq!(cfg.profile, HostProfile::default());
     }
@@ -390,11 +390,11 @@ mod tests {
         files.insert(
             "/profile.json".into(),
             serde_json::json!({
-                "default": "grok-4.5-xhigh",
+                "default": "grok-4.7-high",
                 "models": {
-                    "gpt-5.5-high": {
-                        "label": "GPT-5.5 1M High",
-                        "family": "gpt",
+                    "openai-codex/gpt-6-luna": {
+                        "label": "GPT-6 Luna",
+                        "backend": "pi",
                         "price": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 }
                     }
                 },
@@ -409,11 +409,11 @@ mod tests {
             read_file: Some(reader(files)),
         })
         .unwrap();
-        assert_eq!(cfg.default, "grok-4.5-xhigh");
+        assert_eq!(cfg.default, "grok-4.7-high");
         assert!(cfg.models.contains_key("composer-2.5"));
-        assert!(cfg.models.contains_key("gpt-5.5-high"));
-        assert_eq!(cfg.models["gpt-5.5-high"].family, "gpt");
-        assert_eq!(cfg.price_map["gpt-5.5-high"].output, 30.0);
+        assert!(cfg.models.contains_key("openai-codex/gpt-6-luna"));
+        assert_eq!(cfg.models["openai-codex/gpt-6-luna"].backend, "pi");
+        assert_eq!(cfg.price_map["openai-codex/gpt-6-luna"].output, 30.0);
         assert_eq!(
             cfg.profile.required_deny.as_ref().unwrap(),
             &["rm -rf /".to_string()]
@@ -457,7 +457,7 @@ mod tests {
     fn rejects_non_finite_price() {
         let bad = serde_json::json!({
             "default":"m",
-            "models":{"m":{"label":"M","family":"f","price":{"input":null,"output":1,"cacheRead":0,"cacheWrite":0}}}
+            "models":{"m":{"label":"M","backend":"cursor","price":{"input":null,"output":1,"cacheRead":0,"cacheWrite":0}}}
         })
         .to_string();
         // NaN is not valid JSON; use a missing-like invalid (string) which fails the number check.
@@ -477,7 +477,7 @@ mod tests {
     fn rejects_missing_price_field() {
         let bad = serde_json::json!({
             "default":"m",
-            "models":{"m":{"label":"M","family":"f","price":{"input":1,"output":1,"cacheRead":0}}}
+            "models":{"m":{"label":"M","backend":"cursor","price":{"input":1,"output":1,"cacheRead":0}}}
         })
         .to_string();
         let mut files = HashMap::new();

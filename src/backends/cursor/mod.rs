@@ -212,6 +212,7 @@ fn finish(
     }
     // A non-clean exit with no stdout is the bad-model case: the text is the stderr we kept.
     // Any other missing result line is an error. CANCELLED is the supervisor's status, never ours.
+    // ponytail: the exit code is not carried (clean_exit is a bool); carry Option<i32> if an error text ever needs it.
     let text = if !clean_exit && stdout_empty {
         stderr.to_string()
     } else {

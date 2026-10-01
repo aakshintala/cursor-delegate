@@ -112,22 +112,7 @@ impl Drop for Env {
     }
 }
 
-const ALL_IDS: [&str; 12] = [
-    "composer-2.5",
-    "grok-4.7-high",
-    "grok-4.7-xhigh",
-    "opencode-go/muse-spark-1.3-contributor",
-    "opencode-go/glm-5.3-flash",
-    "opencode-go/deepseek-v4.1-flash",
-    "openai-codex/gpt-6-astra",
-    "openai-codex/gpt-6-luna",
-    "openai-codex/gpt-6.1-sol",
-    "claude-opus-5-5",
-    "claude-sonnet-5-5",
-    "claude-fable-5-1",
-];
-
-const SORTED_IDS: [&str; 12] = [
+const SORTED_IDS: [&str; 14] = [
     "claude-fable-5-1",
     "claude-opus-5-5",
     "claude-sonnet-5-5",
@@ -136,6 +121,8 @@ const SORTED_IDS: [&str; 12] = [
     "grok-4.7-xhigh",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6-luna",
+    "openai-codex/gpt-6-luna:medium",
+    "openai-codex/gpt-6-luna:xhigh",
     "openai-codex/gpt-6.1-sol",
     "opencode-go/deepseek-v4.1-flash",
     "opencode-go/glm-5.3-flash",
@@ -143,7 +130,7 @@ const SORTED_IDS: [&str; 12] = [
 ];
 
 #[test]
-fn models_lists_all_twelve_with_default_marked() {
+fn models_lists_every_row_with_default_marked() {
     let e = Env::new("models", &agent_script(FULL_LIST));
     let out = e.delegate(&["models"], None);
     assert!(
@@ -152,11 +139,8 @@ fn models_lists_all_twelve_with_default_marked() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    for id in ALL_IDS {
-        assert!(stdout.contains(id), "missing {id}:\n{stdout}");
-    }
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 13, "{stdout}");
+    assert_eq!(lines.len(), 15, "{stdout}");
     assert_eq!(
         lines[0],
         "  ID                                      LABEL                       BACKEND  $IN/1M  $OUT/1M"
@@ -166,7 +150,7 @@ fn models_lists_all_twelve_with_default_marked() {
         "* composer-2.5                            Composer 2.5                cursor     0.50     2.50"
     );
     assert_eq!(
-        lines[12],
+        lines[14],
         "  opencode-go/muse-spark-1.3-contributor  Muse Spark 1.3 Contributor  pi         0.10     0.20"
     );
     // Rows sort by backend, then by id; only the default row is starred.

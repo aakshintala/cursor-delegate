@@ -10,7 +10,7 @@ From this repo:
 ./bin/setup.sh
 ```
 
-This builds `delegate`, copies it to `~/.local/bin/delegate`, optionally migrates an old host profile, and installs the Claude Code plugin (skill only).
+This builds `delegate`, copies it to `~/.local/bin/delegate`, optionally migrates an old host profile, and installs the skill for Claude Code and pi.
 
 You need Rust (`cargo`), and `cursor-agent` on PATH with `cursor-agent login` before read-write jobs.
 
@@ -32,8 +32,8 @@ Capabilities: `read-only` (ask mode) or `read-write` (sandbox disabled with forc
 | Backend | Status |
 | --- | --- |
 | `cursor` | Implemented (`cursor-agent`). |
-| `pi` | Planned; lands in a later release. |
-| `claude` | Planned; lands in a later release. |
+| `pi` | Implemented (`pi`). |
+| `claude` | Implemented (`claude`). |
 
 Model ids and prices come from bundled `config/models.json`, merged with your host profile.
 
@@ -45,6 +45,6 @@ Each job writes `$TMPDIR/delegate-jobs/<jobId>.json` (use `$TMPDIR` when set, ot
 
 Optional JSON at `~/.config/delegate/host-profile.json` (or `$XDG_CONFIG_HOME/delegate/host-profile.json`). Override the path with `DELEGATE_HOST_PROFILE`. Keys can set `default`, `models`, `gate`, `idleMs`, and `toolIdleMs`. Missing file is fine; defaults are built in.
 
-## Plugin
+## Skill
 
-The Claude Code plugin ships only the skill under `skills/delegate/`. Run setup to register marketplace `delegate` and install `delegate@delegate`.
+The skill lives in `skills/delegate/`. Setup links it into `~/.claude/skills/delegate` and registers this checkout as a local pi package, so both load it from the repo and an edit is live without a reinstall. The plugin manifest under `.claude-plugin/` ships the same skill for installs from a marketplace.

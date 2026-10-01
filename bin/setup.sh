@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# delegate setup: build the CLI, install on PATH, migrate host profile, install the plugin.
+# delegate setup: build the CLI, install on PATH, migrate host profile, install the skill.
 #   DRY_RUN=1 ./bin/setup.sh   # preview commands without making changes
 set -euo pipefail
 
@@ -49,14 +49,20 @@ elif [ ! -f "$NEW_PROFILE" ] && [ -f "$OLD_PROFILE" ]; then
   run rmdir "$CONFIG_HOME/cursor-delegate" 2>/dev/null || true
 fi
 
-if command -v claude >/dev/null 2>&1; then
-  run claude plugin marketplace add "$REPO_ROOT" --scope user
-  run claude plugin install delegate@delegate --scope user
-  echo "NOTE: remove a previous cursor-delegate install with: claude plugin uninstall cursor-delegate@cursor-delegate-local && claude plugin marketplace remove cursor-delegate-local"
+# Both harnesses load the skill from this checkout, so an edit is live
+# without a reinstall. A plugin install would copy the whole checkout,
+# untracked files included, into Claude's plugin cache.
+SKILL_DIR="$REPO_ROOT/skills/delegate"
+run mkdir -p "$HOME/.claude/skills"
+run ln -sfn "$SKILL_DIR" "$HOME/.claude/skills/delegate"
+if command -v claude >/dev/null 2>&1 && claude plugin list 2>/dev/null | grep -q 'delegate@delegate'; then
+  echo "NOTE: the delegate plugin duplicates the linked skill; remove it with: claude plugin uninstall delegate@delegate && claude plugin marketplace remove delegate"
+fi
+
+if command -v pi >/dev/null 2>&1; then
+  run pi install "$REPO_ROOT"
 else
-  echo "NOTE: 'claude' CLI not found. Install the plugin manually:"
-  echo "  claude plugin marketplace add $REPO_ROOT --scope user"
-  echo "  claude plugin install delegate@delegate --scope user"
+  echo "NOTE: 'pi' not found. For pi, run: pi install $REPO_ROOT"
 fi
 
 echo "Done."

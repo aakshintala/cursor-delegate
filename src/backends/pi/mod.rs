@@ -64,11 +64,21 @@ pub(crate) fn argv(
     (args, true)
 }
 
+/// The `--session-id` value in an argv built by [`argv`].
+fn session_from_argv(argv: &[String]) -> Option<String> {
+    argv.windows(2)
+        .find(|w| w[0] == "--session-id")
+        .map(|w| w[1].clone())
+}
+
 pub(crate) fn spawn(spec: &JobSpec) -> Spawned {
     let started = match super::start_child(spec) {
         Ok(s) => s,
         Err(msg) => return super::spawn_failed(&msg),
     };
+    // The stream usually repeats this id in its `session` header; when it
+    // doesn't (a crash before the first line), the result still carries it.
+    let launched_session = session_from_argv(&spec.argv);
     let pid = started.pid;
     let reaped = started.reaped;
     let reaped_k = std::sync::Arc::clone(&reaped);
@@ -100,7 +110,12 @@ pub(crate) fn spawn(spec: &JobSpec) -> Spawned {
                     }
                 },
             );
-            finish(state, pumped.clean_exit, &pumped.stderr)
+            finish(
+                state,
+                pumped.clean_exit,
+                &pumped.stderr,
+                launched_session.as_deref(),
+            )
         }),
     }
 }
@@ -112,14 +127,13 @@ pub fn parse_stdout(stdout: &str, clean_exit: bool, stderr: &str) -> BackendResu
     for line in stdout.split_inclusive('\n') {
         handle_line(line.as_bytes(), &mut state);
     }
-    finish(state, clean_exit, stderr)
+    finish(state, clean_exit, stderr, None)
 }
 
 #[derive(Debug, Default)]
 struct PiState {
     session_id: Option<String>,
     agent_end: Option<serde_json::Value>,
-    last_assistant_end: Option<serde_json::Value>,
     input: f64,
     output: f64,
     cache_read: f64,
@@ -129,6 +143,15 @@ struct PiState {
     last_tool: Option<String>,
     last_assistant: Option<String>,
     phase: Option<String>,
+}
+
+/// A finite f64 field, or 0.0 when it is missing or malformed. Each field
+/// decodes on its own so one bad number doesn't void the rest of the usage.
+fn num(obj: Option<&serde_json::Value>, key: &str) -> f64 {
+    obj.and_then(|u| u.get(key))
+        .and_then(|n| n.as_f64())
+        .filter(|n| n.is_finite())
+        .unwrap_or(0.0)
 }
 
 /// Fold one stdout line into the state. Unparseable lines are ignored.
@@ -179,34 +202,12 @@ fn handle_line(line: &[u8], state: &mut PiState) -> bool {
                 _ => return false,
             };
             let usage = message.get("usage");
-            state.input += usage
-                .and_then(|u| u.get("input"))
-                .and_then(|n| n.as_f64())
-                .filter(|n| n.is_finite())
-                .unwrap_or(0.0);
-            state.output += usage
-                .and_then(|u| u.get("output"))
-                .and_then(|n| n.as_f64())
-                .filter(|n| n.is_finite())
-                .unwrap_or(0.0);
-            state.cache_read += usage
-                .and_then(|u| u.get("cacheRead"))
-                .and_then(|n| n.as_f64())
-                .filter(|n| n.is_finite())
-                .unwrap_or(0.0);
-            state.cache_write += usage
-                .and_then(|u| u.get("cacheWrite"))
-                .and_then(|n| n.as_f64())
-                .filter(|n| n.is_finite())
-                .unwrap_or(0.0);
-            state.cost += usage
-                .and_then(|u| u.get("cost"))
-                .and_then(|c| c.get("total"))
-                .and_then(|n| n.as_f64())
-                .filter(|n| n.is_finite())
-                .unwrap_or(0.0);
+            state.input += num(usage, "input");
+            state.output += num(usage, "output");
+            state.cache_read += num(usage, "cacheRead");
+            state.cache_write += num(usage, "cacheWrite");
+            state.cost += num(usage.and_then(|u| u.get("cost")), "total");
             state.saw_assistant_end = true;
-            state.last_assistant_end = Some(message.clone());
             true
         }
         Some("agent_end") => {
@@ -235,11 +236,21 @@ fn assistant_text(message: &serde_json::Value) -> String {
 
 /// Turn the terminal `agent_end` (or the lack of one) into the normalized result.
 /// The exit code never decides success: pi exits 0 on errors. CANCELLED is the
-/// supervisor's status, never ours.
-fn finish(state: PiState, clean_exit: bool, stderr: &str) -> BackendResult {
+/// supervisor's status, never ours. `launched_session` is the `--session-id`
+/// the run was launched with, used when the stream never sent a header.
+fn finish(
+    state: PiState,
+    clean_exit: bool,
+    stderr: &str,
+    launched_session: Option<&str>,
+) -> BackendResult {
+    let session_id = state
+        .session_id
+        .or_else(|| launched_session.map(str::to_string));
     let Some(end) = state.agent_end else {
         return BackendResult {
             text: NO_RESULT.to_string(),
+            session_id,
             is_error: Some(true),
             clean_exit,
             stderr: stderr.to_string(),
@@ -263,19 +274,12 @@ fn finish(state: PiState, clean_exit: bool, stderr: &str) -> BackendResult {
             Some(true),
         ),
         Some(m) => (assistant_text(m), Some(false)),
-        // No assistant turn in the transcript; fall back to its last message.
-        None => (
-            state
-                .last_assistant_end
-                .as_ref()
-                .map(assistant_text)
-                .unwrap_or_default(),
-            Some(false),
-        ),
+        // No assistant turn in the transcript at all: an error with no text.
+        None => (NO_RESULT.to_string(), Some(true)),
     };
     BackendResult {
         text,
-        session_id: state.session_id,
+        session_id,
         usage: state.saw_assistant_end.then_some(Usage {
             input_tokens: state.input,
             output_tokens: state.output,
@@ -378,6 +382,51 @@ mod tests {
     }
 
     #[test]
+    fn missing_header_falls_back_to_the_launch_session_id() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi");
+        let stdout = std::fs::read_to_string(dir.join("plain-answer.stdout")).unwrap();
+        let stripped: String = stdout
+            .lines()
+            .filter(|l| !l.contains("\"type\":\"session\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(stripped.len(), stdout.len());
+        let mut state = PiState::default();
+        for line in stripped.split_inclusive('\n') {
+            handle_line(line.as_bytes(), &mut state);
+        }
+        assert!(state.session_id.is_none());
+        let res = finish(
+            state,
+            true,
+            "",
+            Some("11111111-2222-4333-8444-555555555555"),
+        );
+        assert_eq!(
+            res.session_id.as_deref(),
+            Some("11111111-2222-4333-8444-555555555555")
+        );
+        assert_eq!(res.text, "391\nSTATUS: DONE");
+        assert_eq!(res.is_error, Some(false));
+    }
+
+    #[test]
+    fn agent_end_without_an_assistant_message_is_an_error() {
+        let stdout = concat!(
+            "{\"type\":\"session\",\"id\":\"sid-1\"}\n",
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":",
+            "[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input\":1,\"output\":2,",
+            "\"cacheRead\":0,\"cacheWrite\":0,\"cost\":{\"total\":0.5}}}}\n",
+            "{\"type\":\"agent_end\",\"messages\":[{\"role\":\"user\",\"content\":[]}],",
+            "\"willRetry\":false}\n",
+        );
+        let res = parse_stdout(stdout, true, "");
+        assert_eq!(res.text, NO_RESULT);
+        assert_eq!(res.is_error, Some(true));
+        assert_eq!(res.session_id.as_deref(), Some("sid-1"));
+    }
+
+    #[test]
     fn spawn_failure_is_an_error_result() {
         let spec = crate::job::tests::spec_of(|s| s.bin = "/nonexistent/pi".into());
         let spawned = spawn(&spec);
@@ -440,7 +489,12 @@ mod tests {
             if stem == "cancelled" {
                 assert_eq!(res.is_error, Some(true), "{stem}");
                 assert_eq!(res.text, NO_RESULT, "{stem}");
-                assert!(res.session_id.is_none() && res.usage.is_none(), "{stem}");
+                assert_eq!(
+                    res.session_id.as_deref(),
+                    Some("aab8b00e-3999-48d2-b8ee-3ebf95ff5350"),
+                    "{stem}"
+                );
+                assert!(res.usage.is_none(), "{stem}");
                 assert_eq!(res.cost_usd, None, "{stem}");
                 continue;
             }

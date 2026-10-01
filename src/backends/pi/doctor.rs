@@ -3,7 +3,7 @@
 
 use super::resolve_bin;
 use crate::cli_info::status_line;
-use crate::doctor::{AgentCommandResult, RunDoctorOpts};
+use crate::doctor::{AgentCommandResult, RunDoctorOpts, command_err};
 use crate::types::{DoctorBackendSection, DoctorReport};
 
 pub(crate) fn fill(report: &mut DoctorReport, opts: &RunDoctorOpts<'_>) {
@@ -52,11 +52,8 @@ pub(crate) fn fill(report: &mut DoctorReport, opts: &RunDoctorOpts<'_>) {
             &["auth".into(), "check".into(), "--model".into(), id.clone()],
         );
         if !r.ok {
-            let err = command_err(&r, &format!("auth check --model {id}"));
+            let err = command_err("pi", &r, &format!("auth check --model {id}"));
             model_failures.push(format!("model {id} auth check failed: {err}"));
-            report
-                .warnings
-                .push(format!("pi: model {id} auth check failed: {err}"));
         }
     }
     report.sections.push(DoctorBackendSection {
@@ -97,24 +94,13 @@ pub(crate) fn lines(report: &DoctorReport) -> (String, bool) {
     (text, failed)
 }
 
-fn command_err(r: &AgentCommandResult, what: &str) -> String {
-    r.error.clone().unwrap_or_else(|| {
-        let t = r.stderr.trim();
-        if t.is_empty() {
-            format!("pi {what} failed")
-        } else {
-            t.to_string()
-        }
-    })
-}
-
 pub(crate) fn probe_version(
     bin: &str,
     run_command: &dyn Fn(&str, &[String]) -> AgentCommandResult,
 ) -> (Option<String>, Option<String>) {
     let r = run_command(bin, &["--version".into()]);
     if !r.ok {
-        return (None, Some(command_err(&r, "--version")));
+        return (None, Some(command_err("pi", &r, "--version")));
     }
     let version = r.stdout.trim();
     (
@@ -174,43 +160,10 @@ mod tests {
         }
     }
 
-    fn empty_report() -> DoctorReport {
-        DoctorReport {
-            ok: false,
-            plugin: crate::types::DoctorPluginInfo {
-                version: "1.0.0".into(),
-            },
-            agent: crate::types::DoctorAgentInfo {
-                found: false,
-                path: None,
-                version: None,
-                error: None,
-            },
-            account: crate::types::DoctorAccountInfo {
-                logged_in: false,
-                email: None,
-                subscription: None,
-                current_model: None,
-                error: None,
-            },
-            model_menu: crate::types::DoctorModelMenuInfo {
-                configured_ids: vec![],
-                account_ids: None,
-                missing_from_account: vec![],
-                prices_checkable: false,
-                note: String::new(),
-                error: None,
-            },
-            sections: vec![],
-            warnings: vec![],
-            failures: vec![],
-        }
-    }
-
     #[test]
     fn fill_ok_and_auth_failure_is_a_warning() {
         let config = config_with_pi();
-        let mut report = empty_report();
+        let mut report = DoctorReport::default();
         let opts = RunDoctorOpts {
             config: &config,
             resolve_bin: Some(&|_| "/bin/pi".into()),
@@ -230,7 +183,13 @@ mod tests {
         };
         fill(&mut report, &opts);
         assert!(report.failures.is_empty());
-        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings.is_empty());
+        let section = report
+            .sections
+            .iter()
+            .find(|s| s.backend == "pi")
+            .expect("pi section");
+        assert_eq!(section.model_failures.len(), 1);
         let (text, failed) = lines(&report);
         assert!(!failed);
         assert!(text.contains("ok    pi: pi 0.99.2 (/bin/pi)"), "{text}");
@@ -243,7 +202,7 @@ mod tests {
     #[test]
     fn fill_missing_binary_is_a_failure() {
         let config = config_with_pi();
-        let mut report = empty_report();
+        let mut report = DoctorReport::default();
         let opts = RunDoctorOpts {
             config: &config,
             resolve_bin: Some(&|_| "/nowhere/pi".into()),
@@ -260,7 +219,7 @@ mod tests {
 
     #[test]
     fn lines_empty_without_a_pi_section() {
-        let report = empty_report();
+        let report = DoctorReport::default();
         assert_eq!(lines(&report), (String::new(), false));
     }
 }

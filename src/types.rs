@@ -187,12 +187,12 @@ pub struct Config {
     pub profile: HostProfile,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DoctorPluginInfo {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DoctorAgentInfo {
     pub found: bool,
     pub path: Option<String>,
@@ -201,7 +201,7 @@ pub struct DoctorAgentInfo {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorAccountInfo {
     pub logged_in: bool,
@@ -212,7 +212,7 @@ pub struct DoctorAccountInfo {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorModelMenuInfo {
     pub configured_ids: Vec<String>,
@@ -235,7 +235,7 @@ pub struct DoctorBackendSection {
     pub model_failures: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorReport {
     pub ok: bool,

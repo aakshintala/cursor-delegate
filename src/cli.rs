@@ -97,6 +97,16 @@ fn capability(name: &str) -> Result<(Capability, &'static str), Usage> {
     }
 }
 
+/// pi runs with the user's full configuration and cannot enforce read-only:
+/// reject before anything detaches.
+fn reject_pi_read_only(config: &Config, model: &str, cap_name: &str) -> Result<(), Usage> {
+    if cap_name == "read-only" && config.models.get(model).map(|e| e.backend.as_str()) == Some("pi")
+    {
+        return usage("pi cannot enforce read-only");
+    }
+    Ok(())
+}
+
 /// The shared half of `run` and `resume`: lock, stash the prompt, spawn the detached
 /// supervisor and wait for its first record. Returns the new job id. `Usage` means exit
 /// 2; `Done` means the reason is already on stderr, return the code.
@@ -254,13 +264,7 @@ fn run(args: &[String]) -> Result<i32, Usage> {
         }
         return usage(format!("{e}"));
     }
-    // pi runs with the user's full configuration and cannot enforce read-only:
-    // reject before anything detaches.
-    if cap_name == "read-only"
-        && deps.config.models.get(model).map(|e| e.backend.as_str()) == Some("pi")
-    {
-        return usage("pi cannot enforce read-only");
-    }
+    reject_pi_read_only(&deps.config, model, cap_name)?;
     let mut prompt = String::new();
     match flag(&kv, "--prompt-file") {
         Some(f) => prompt = std::fs::read_to_string(f).map_err(|e| Usage(format!("{f}: {e}")))?,
@@ -367,13 +371,7 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
     }
     let cap_name = flag(&kv, "--capability").unwrap_or(&stored_cap).to_string();
     capability(&cap_name)?;
-    // pi runs with the user's full configuration and cannot enforce read-only:
-    // reject before anything detaches.
-    if cap_name == "read-only"
-        && deps.config.models.get(&model).map(|e| e.backend.as_str()) == Some("pi")
-    {
-        return usage("pi cannot enforce read-only");
-    }
+    reject_pi_read_only(&deps.config, &model, &cap_name)?;
     let gate = flag(&kv, "--gate").unwrap_or(&stored_gate).to_string();
 
     let mut prompt = String::new();

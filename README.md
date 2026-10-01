@@ -1,84 +1,50 @@
-# cursor-delegate
+# delegate
 
-An MCP stdio server that lets a host agent (Claude Code, or any MCP client) delegate
-coding/research tasks to **Cursor's models** by shelling out to the local `cursor-agent` CLI in
-headless (`--print`) mode.
+A small CLI that runs coding and research tasks on Cursor, pi, or Claude Code models by driving the local `cursor-agent` binary in headless mode. Jobs are detached supervisors; you poll status from JSON files on disk.
 
-See [`spec.md`](./spec.md) for the original reproduction spec and
-[`docs/superpowers/specs/2026-07-09-cursor-delegate-model-layer-design.md`](./docs/superpowers/specs/2026-07-09-cursor-delegate-model-layer-design.md)
-for the current model-layer design. Highlights:
+## Install
 
-- **Curated model allow-list** — a single `config/models.json` maps each callable id to a label,
-  a `family` tag, and `$/MTok` prices. A model is callable iff it is in the map; the `model` enum
-  and a recommended-models blurb are generated into the `cursor_run` schema at startup. Default is
-  `composer-2.5` when `model` is omitted.
-- **Uncorrelated review contract** — `requireNonClaude: true` **hard-rejects** if the resolved
-  model's family is `claude` (no silent swap), so a reviewer never shares the producer's family.
-- **Capability modes** — `ask` / `plan` (read-only: no edits, but they run read-only shell such as
-  `git show` for branch-only content) vs `write` / `write-unsandboxed`. Every mode runs `--force`
-  so a headless agent never blocks on an approval prompt.
-- **Fail-closed deny-list** — **every** call (read-only included) is refused unless the host's
-  cursor-agent deny-list contains every required pattern. Because `--force` lets even `ask`/`plan`
-  run non-denied shell commands, the deny-list is their only guard.
-- **Async job model** — fast tasks return synchronously; slow tasks detach and hand back a `jobId`
-  you `cursor_poll` / `cursor_wait` on. Live progress streams while a call blocks.
-- **Needs-input round-trip** — a delegate that ends with `STATUS: NEEDS_CONTEXT` is retained as a
-  parked job (carrying its `sessionId` + run context); `cursor_answer(jobId, answer)` resumes it via
-  `--resume`. The result's `text` **is** the delegate's question.
-- **Ground-truth verification** — the tool computes the git change-set itself, runs an optional
-  postcondition `gate`, and surfaces stderr on failure.
-- **Same-path write serialization** — concurrent writes to one tree are refused (`BUSY`), not
-  interleaved.
-- **Setup diagnostics** — a `doctor` tool probes the plugin version, `cursor-agent` binary +
-  login, and configured-vs-account model-menu drift (missing ids are warnings, not failures).
-
-## Tools
-
-`cursor_run`, `cursor_poll`, `cursor_cancel`, `cursor_wait`, `cursor_wait_any`, `cursor_wait_all`,
-`cursor_answer`, `doctor`.
-
-For orchestration guidance (when to delegate, model picks, the plan-writer brief, the needs-input
-resume flow), see the [`delegate` skill](./skills/delegate/SKILL.md).
-
-## Prerequisites (per machine)
-
-1. `cursor-agent` installed and logged in (`cursor-agent status`).
-2. A host profile at `~/.config/cursor-delegate/host-profile.json` (scaffolded by setup).
-3. For **any** capability (read-only `ask`/`plan` included, since they run `--force` shell): the
-   host deny-list merged into `~/.cursor/cli-config.json` `permissions.deny`. These files are
-   per-machine — do not copy them between hosts.
-
-## Build & install
+From this repo:
 
 ```bash
-./bin/setup.sh          # build + scaffold profile + install plugin at user scope
-DRY_RUN=1 ./bin/setup.sh # preview without changes
+./bin/setup.sh
 ```
 
-Or manually:
+This builds `delegate`, copies it to `~/.local/bin/delegate`, optionally migrates an old host profile, and installs the Claude Code plugin (skill only).
 
-```bash
-cargo build --release && cp target/release/cursor-delegate-mcp bin/
-claude plugin marketplace add ./ --scope user
-claude plugin install cursor-delegate@cursor-delegate-local --scope user
-```
+You need Rust (`cargo`), and `cursor-agent` on PATH with `cursor-agent login` before read-write jobs.
 
-## Develop
+## Commands
 
-```bash
-cargo test                                     # unit tests + stdio e2e against a fake cursor-agent
-cargo test --test live -- --ignored            # opt-in: real cursor-agent (logged in; spends one request)
-cargo fmt --check && cargo clippy -- -D warnings
-parity/check.sh                                # reply snapshot + idle RSS gate (needs jq)
-```
+| Command | Purpose |
+| --- | --- |
+| `delegate run` | Start a job (prompt on stdin or `--prompt-file`); prints the job id. |
+| `delegate resume <jobId>` | Continue a finished job that has a session id; optional model/capability/gate overrides. |
+| `delegate cancel <jobId>` | Stop a running job and print its terminal record. |
+| `delegate watch <jobId>...` | Block until each job is terminal (optional `--timeout` seconds). |
+| `delegate models` | List configured model ids, labels, backends, and prices. |
+| `delegate doctor` | Check the binary, `cursor-agent`, login, and model menu drift. |
 
-## Config
+Capabilities: `read-only` (ask mode) or `read-write` (sandbox disabled with force). Read-write jobs take an exclusive lock on the working directory.
 
-| file | role |
-|---|---|
-| `config/models.json` (bundled) | model allow-list: `default` + per-id `{label, family, price}` (`$/MTok`) |
-| `~/.config/cursor-delegate/host-profile.json` | overrides + policy; may merge `default` / `models` and set `requiredDeny`, `gate`, deadlines (override path via `$CURSOR_DELEGATE_HOST_PROFILE`) |
-| `~/.cursor/cli-config.json` | Cursor's own `permissions.deny` — checked before every run (all caps carry `--force`) |
+## Backends
 
-See [`skills/delegate/SKILL.md`](./skills/delegate/SKILL.md) for the reusable "agent" convention
-tuples over `cursor_run` (catalog table).
+| Backend | Status |
+| --- | --- |
+| `cursor` | Implemented (`cursor-agent`). |
+| `pi` | Planned; lands in a later release. |
+| `claude` | Planned; lands in a later release. |
+
+Model ids and prices come from bundled `config/models.json`, merged with your host profile.
+
+## Status records
+
+Each job writes `$TMPDIR/delegate-jobs/<jobId>.json` (use `$TMPDIR` when set, otherwise the OS temp directory). Prompt text is stored alongside as `<jobId>.prompt` until the supervisor starts.
+
+## Host profile
+
+Optional JSON at `~/.config/delegate/host-profile.json` (or `$XDG_CONFIG_HOME/delegate/host-profile.json`). Override the path with `DELEGATE_HOST_PROFILE`. Keys can set `default`, `models`, `gate`, `idleMs`, and `toolIdleMs`. Missing file is fine; defaults are built in.
+
+## Plugin
+
+The Claude Code plugin ships only the skill under `skills/delegate/`. Run setup to register marketplace `delegate` and install `delegate@delegate`.

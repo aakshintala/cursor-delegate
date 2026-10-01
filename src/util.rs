@@ -76,6 +76,13 @@ pub fn random_uuid() -> String {
     )
 }
 
+pub fn xdg_config_home() -> std::path::PathBuf {
+    match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => homedir().join(".config"),
+    }
+}
+
 pub fn homedir() -> std::path::PathBuf {
     if let Ok(h) = std::env::var("HOME") {
         return std::path::PathBuf::from(h);

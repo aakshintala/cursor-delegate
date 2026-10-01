@@ -7,9 +7,10 @@ pub trait StatusRecordWriter: Send + Sync {
     fn write(&self, job_id: &str, record: &PollResult);
 }
 
-pub fn status_record_path(job_id: &str) -> PathBuf {
+/// Status JSON for one job under `$TMPDIR/delegate-jobs/`.
+pub fn job_record_path(job_id: &str) -> PathBuf {
     std::env::temp_dir()
-        .join("cursor-delegate-jobs")
+        .join("delegate-jobs")
         .join(format!("{job_id}.json"))
 }
 
@@ -17,7 +18,7 @@ pub struct FileStatusRecordWriter;
 
 impl StatusRecordWriter for FileStatusRecordWriter {
     fn write(&self, job_id: &str, record: &PollResult) {
-        let _ = write_atomic(&status_record_path(job_id), &json_compact(record));
+        let _ = write_atomic(&job_record_path(job_id), &json_compact(record));
     }
 }
 
@@ -43,13 +44,6 @@ impl StatusRecordWriter for NoopStatusWriter {
     fn write(&self, _job_id: &str, _record: &PollResult) {}
 }
 
-/// Where the `delegate` CLI keeps one job's record (the only source of truth for that job).
-pub fn cli_record_path(job_id: &str) -> PathBuf {
-    std::env::temp_dir()
-        .join("delegate-jobs")
-        .join(format!("{job_id}.json"))
-}
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliResume {
@@ -64,9 +58,7 @@ pub struct CliResume {
 
 /// `PollResult` plus what a watcher needs to find and resume the job, plus the resume
 /// chain links: `resumedFrom` (this job continues that one) and `supersededBy` (written
-/// into the old record once the new job is spawned). The flattened `poll` already carries
-/// `supersededBy` when the registry set it; the file rewrite for a long-gone supervisor
-/// inserts the same top-level key.
+/// into the old record once the new job is spawned).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliRecord {
@@ -92,7 +84,6 @@ pub struct CliRecordWriter {
 }
 
 impl StatusRecordWriter for CliRecordWriter {
-    // The registry mints its own id; the CLI id is the one the caller holds.
     fn write(&self, _registry_id: &str, record: &PollResult) {
         let mut poll = record.clone();
         let mut session_id = None;
@@ -113,7 +104,7 @@ impl StatusRecordWriter for CliRecordWriter {
             },
             resumed_from: self.resumed_from.clone(),
         };
-        let path = cli_record_path(&self.job_id);
+        let path = job_record_path(&self.job_id);
         let res = write_atomic(&path, &json_compact(&rec));
         if let Err(e) = res {
             eprintln!("cannot write status record {}: {e}", path.display());
@@ -148,13 +139,11 @@ pub fn write_supervisor_died(job_id: &str, prior: &serde_json::Value) -> std::io
             "jobId": job_id,
         }),
     );
-    write_atomic(&cli_record_path(job_id), &json_compact(&rec))
+    write_atomic(&job_record_path(job_id), &json_compact(&rec))
 }
 
 /// A RUNNING record whose supervisor is gone or had to be SIGKILLed: nobody is left to
-/// finalize, so `cancel` writes the CANCELLED terminal record itself. Mutates a copy of
-/// the prior record: the status and result flip, the session (which never produced a
-/// result) is nulled, and everything else — resume, pids, chain links — is kept.
+/// finalize, so `cancel` writes the CANCELLED terminal record itself.
 pub fn write_cancelled(job_id: &str, prior: &serde_json::Value) -> std::io::Result<()> {
     let mut rec = prior.clone();
     let Some(obj) = rec.as_object_mut() else {
@@ -187,5 +176,5 @@ pub fn write_cancelled(job_id: &str, prior: &serde_json::Value) -> std::io::Resu
     if let Some(resume) = obj.get_mut("resume").and_then(|r| r.as_object_mut()) {
         resume.insert("sessionId".into(), serde_json::Value::Null);
     }
-    write_atomic(&cli_record_path(job_id), &json_compact(&rec))
+    write_atomic(&job_record_path(job_id), &json_compact(&rec))
 }

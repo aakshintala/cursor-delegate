@@ -11,7 +11,7 @@ use crate::lock::{self, AcquireError};
 use crate::models::resolve_model;
 use crate::prompt::status_block;
 use crate::status_record::{
-    CliRecordWriter, cli_record_path, write_atomic, write_cancelled, write_supervisor_died,
+    CliRecordWriter, job_record_path, write_atomic, write_cancelled, write_supervisor_died,
 };
 use crate::types::{Capability, Config, JobSpec, ResumeContext};
 use crate::util::{json_compact, random_uuid, resolve_path};
@@ -137,7 +137,7 @@ fn launch(p: LaunchParams<'_>) -> Result<String, LaunchErr> {
     } else {
         None
     };
-    let record = cli_record_path(&id);
+    let record = job_record_path(&id);
     let dir = record.parent().expect("record has a parent");
     if let Err(e) = std::fs::create_dir_all(dir) {
         return Err(LaunchErr::Usage(format!("{}: {e}", dir.display())));
@@ -406,7 +406,7 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
             if let Some(obj) = old.as_object_mut() {
                 obj.insert("supersededBy".into(), new_id.clone().into());
             }
-            if let Err(e) = write_atomic(&cli_record_path(old_id), &json_compact(&old)) {
+            if let Err(e) = write_atomic(&job_record_path(old_id), &json_compact(&old)) {
                 eprintln!("warning: cannot link {old_id} to {new_id}: {e}");
             }
         }
@@ -492,7 +492,7 @@ fn cancel_write(id: &str, prior: &serde_json::Value) -> Result<i32, Usage> {
     if let Err(e) = write_cancelled(id, prior) {
         eprintln!(
             "cannot write status record {}: {e}",
-            cli_record_path(id).display()
+            job_record_path(id).display()
         );
         return Ok(1);
     }
@@ -593,7 +593,7 @@ fn supervise(args: &[String]) -> i32 {
         Err(e) => return fail(e.to_string()),
     };
     let config = deps.config;
-    let prompt_file = cli_record_path(id).with_extension("prompt");
+    let prompt_file = job_record_path(id).with_extension("prompt");
     let Ok(prompt) = std::fs::read_to_string(&prompt_file) else {
         return fail(format!("cannot read {}", prompt_file.display()));
     };
@@ -725,7 +725,7 @@ fn spawn_cancel_waiter(registry: Arc<JobHandle>, job: String, fd: i32) {
 }
 
 fn read_record(id: &str) -> Option<String> {
-    std::fs::read_to_string(cli_record_path(id)).ok()
+    std::fs::read_to_string(job_record_path(id)).ok()
 }
 
 fn watch(args: &[String]) -> Result<i32, Usage> {
@@ -806,7 +806,7 @@ fn settle_dead_supervisor(id: &str) {
     if let Err(e) = write_supervisor_died(id, &v) {
         eprintln!(
             "cannot write status record {}: {e}",
-            cli_record_path(id).display()
+            job_record_path(id).display()
         );
     }
 }

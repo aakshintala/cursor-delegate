@@ -1,6 +1,6 @@
 [package]
-name = "cursor-delegate-mcp"
-version = "0.5.0"
+name = "delegate"
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 

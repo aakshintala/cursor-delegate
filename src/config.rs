@@ -186,8 +186,8 @@ fn decode_host_profile(raw: Option<&Value>) -> Result<HostProfile, String> {
 }
 
 pub fn default_host_profile_path() -> String {
-    crate::util::homedir()
-        .join(".config/cursor-delegate/host-profile.json")
+    crate::util::xdg_config_home()
+        .join("delegate/host-profile.json")
         .to_string_lossy()
         .into_owned()
 }
@@ -221,8 +221,7 @@ pub fn load_config(
         }
     };
     let profile_path = opts.host_profile_path.clone().unwrap_or_else(|| {
-        std::env::var("CURSOR_DELEGATE_HOST_PROFILE")
-            .unwrap_or_else(|_| default_host_profile_path())
+        std::env::var("DELEGATE_HOST_PROFILE").unwrap_or_else(|_| default_host_profile_path())
     });
 
     let file_raw = read_json(&read_fn, &opts.models_path)?;

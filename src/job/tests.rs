@@ -3,7 +3,7 @@
 use super::*;
 use crate::backends::types::{Backend, BackendResult, Event, ProgressSnapshotRaw, Spawned};
 use crate::output::derive_status;
-use crate::status_record::{FileStatusRecordWriter, status_record_path};
+use crate::status_record::{FileStatusRecordWriter, job_record_path};
 use crate::types::{Capability, RawCursorJson, ResumeContext, RunStatus};
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -339,7 +339,7 @@ fn progress_events_do_not_trigger_status_writes() {
 fn file_status_record_is_overwritten_from_running_to_terminal() {
     let s = setup_with(|d| d.status_writer = Arc::new(FileStatusRecordWriter));
     let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
-    let path = status_record_path(&id);
+    let path = job_record_path(&id);
     let read = || -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
     };

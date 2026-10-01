@@ -115,18 +115,31 @@ pub(crate) fn lines(report: &DoctorReport) -> (String, bool) {
 /// exits 0 for any id, so query `pi --list-models <model>` and require a
 /// row whose provider and model columns equal the configured id exactly
 /// (the search is fuzzy: `gpt-5.6-luna` rows also match a `gpt-6-luna`
-/// query). A configured id may carry a `:<thinking>` suffix, stripped
-/// before matching; a suffixed id additionally requires the row's
-/// thinking column to be `yes`. Returns the model failure, if any.
+/// query). A trailing `:<thinking>` suffix is stripped before matching and
+/// additionally requires the row's thinking column to be `yes`; any other
+/// colon belongs to the model itself (`vendor/model:free`) and is matched
+/// whole. Returns the model failure, if any.
+///
+/// Only the text after the LAST `:` counts, and only when it is a pi
+/// thinking level.
+const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh"];
+
+/// Split a configured id into (model id, wants thinking). Only a trailing
+/// `:<thinking level>` is stripped; any other colon is part of the model
+/// id itself (e.g. `vendor/model:free`).
+fn split_thinking_suffix(id: &str) -> (&str, bool) {
+    match id.rsplit_once(':') {
+        Some((base, level)) if THINKING_LEVELS.contains(&level) => (base, true),
+        _ => (id, false),
+    }
+}
+
 pub(crate) fn probe_membership(
     bin: &str,
     id: &str,
     run_command: &dyn Fn(&str, &[String]) -> AgentCommandResult,
 ) -> Option<String> {
-    let (base, wants_thinking) = match id.split_once(':') {
-        Some((b, _)) => (b, true),
-        None => (id, false),
-    };
+    let (base, wants_thinking) = split_thinking_suffix(id);
     let (provider, model) = match base.split_once('/') {
         Some((p, m)) => (Some(p), m),
         None => (None, base),
@@ -356,6 +369,36 @@ mod tests {
             "{}",
             failures[0]
         );
+    }
+
+    #[test]
+    fn fill_native_colon_id_matches_whole() {
+        // `openrouter/llama-4-maverick:free` is a native colon id, not a
+        // thinking suffix: the whole id is matched and no thinking level
+        // is required, even though the row reports thinking no.
+        const ROW: &str = "openrouter  llama-4-maverick:free  1.1M  128K  no  yes\n";
+        let list = std::collections::HashMap::from([(
+            "llama-4-maverick:free".to_string(),
+            format!("{LIST_HEADER}{ROW}"),
+        )]);
+        let run = run_with_list(list);
+        let failures = model_failures_for(&["openrouter/llama-4-maverick:free"], &run);
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    #[test]
+    fn fill_native_colon_id_with_thinking_suffix_strips_last_segment_only() {
+        // Only the trailing `:high` is a thinking level; the remainder
+        // `llama-4-maverick:free` is the model, matched exactly with
+        // thinking yes required.
+        const ROW: &str = "openrouter  llama-4-maverick:free  1.1M  128K  yes  yes\n";
+        let list = std::collections::HashMap::from([(
+            "llama-4-maverick:free".to_string(),
+            format!("{LIST_HEADER}{ROW}"),
+        )]);
+        let run = run_with_list(list);
+        let failures = model_failures_for(&["openrouter/llama-4-maverick:free:high"], &run);
+        assert!(failures.is_empty(), "{failures:?}");
     }
 
     #[test]

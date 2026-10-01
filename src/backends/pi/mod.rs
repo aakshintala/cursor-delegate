@@ -537,6 +537,14 @@ mod tests {
                     assert!(approx(res.cost_usd.unwrap(), 0.00101644), "{stem}");
                     assert_eq!(res.is_error, Some(false), "{stem}");
                 }
+                // Real lane runs from the flywheel: any finished run parses to a session,
+                // a reported cost and a trailing STATUS line.
+                other if other.starts_with("lane-") => {
+                    assert_eq!(res.is_error, Some(false), "{stem}");
+                    assert!(res.session_id.is_some(), "{stem}");
+                    assert!(res.cost_usd.unwrap() > 0.0, "{stem}");
+                    assert!(res.text.contains("STATUS:"), "{stem}");
+                }
                 other => panic!("unexpected pi fixture: {other}"),
             }
         }

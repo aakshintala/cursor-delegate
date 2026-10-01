@@ -54,5 +54,15 @@ code=$?
 for f in "$out/$name".{stdout,stderr,argv}; do
   jq -rR -L "$here" 'include "redact"; (fromjson? | redact | tojson) // .' "$f" | sed "s/${USER:?}/user/g" > "$f.tmp" && mv "$f.tmp" "$f"
 done
+# Leak-scan the files just written, after redaction. On a hit the fixture
+# is deleted and recording fails: a fixture quoting a pattern is not
+# committed (no allowlist). The scan prints pattern names only, never
+# matched text.
+leaks="$("$here/leak-scan.sh" "$out/$name.stdout" "$out/$name.stderr" "$out/$name.argv" 2>&1)" || {
+  [ -n "$leaks" ] && printf '%s\n' "$leaks" >&2
+  rm -f "$out/$name".{stdout,stderr,argv}
+  echo "record.sh: leak-scan hit, fixture deleted" >&2
+  exit 3
+}
 echo "session=$session exit=$code fixture=$out/$name.stdout"
 exit $code

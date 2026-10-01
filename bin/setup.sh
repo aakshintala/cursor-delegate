@@ -46,6 +46,7 @@ elif [ ! -f "$NEW_PROFILE" ] && [ -f "$OLD_PROFILE" ]; then
   echo "Migrating host profile to $NEW_PROFILE"
   run mkdir -p "$(dirname "$NEW_PROFILE")"
   run mv "$OLD_PROFILE" "$NEW_PROFILE"
+  run rmdir "$CONFIG_HOME/cursor-delegate" 2>/dev/null || true
 fi
 
 if command -v claude >/dev/null 2>&1; then

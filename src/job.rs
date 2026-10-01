@@ -5,8 +5,7 @@ use crate::backends::types::{Backend, BackendResult, Event, ProgressSnapshotRaw}
 use crate::finalize::{finalize_run, finalize_stall};
 use crate::status_record::StatusRecordWriter;
 use crate::types::{
-    DispatchResult, FinalizeCtx, JobSpec, JobStatus, PollResult, ProgressSnapshot, RunOutput,
-    RunStatus,
+    FinalizeCtx, JobSpec, JobStatus, PollResult, ProgressSnapshot, RunOutput, RunStatus,
 };
 use crate::util::{clamp_wait, random_uuid};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,7 +19,6 @@ pub type FinalizeFn = Arc<dyn Fn(&BackendResult, &FinalizeCtx) -> RunOutput + Se
 
 pub struct JobDeps {
     pub backend: Arc<dyn Backend>,
-    pub deadline_ms: f64,
     pub idle_ms: Option<f64>,
     pub tool_idle_ms: Option<f64>,
     pub finalize: FinalizeFn,
@@ -30,15 +28,9 @@ pub struct JobDeps {
 }
 
 impl JobDeps {
-    pub fn new(
-        backend: Arc<dyn Backend>,
-        deadline_ms: f64,
-        idle_ms: Option<f64>,
-        tool_idle_ms: Option<f64>,
-    ) -> Self {
+    pub fn new(backend: Arc<dyn Backend>, idle_ms: Option<f64>, tool_idle_ms: Option<f64>) -> Self {
         Self {
             backend,
-            deadline_ms,
             idle_ms,
             tool_idle_ms,
             finalize: Arc::new(finalize_run),
@@ -48,9 +40,6 @@ impl JobDeps {
         }
     }
 }
-
-#[derive(Clone, Copy, Default)]
-pub struct WaitOpts;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Stage {
@@ -91,14 +80,6 @@ fn epoch_ms() -> f64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as f64)
         .unwrap_or(0.0)
-}
-
-fn detach_result(job_id: &str) -> DispatchResult {
-    DispatchResult::Detached {
-        status: "RUNNING",
-        job_id: job_id.to_string(),
-        busy_path: None,
-    }
 }
 
 fn describe_stall_progress(job: &JobState) -> String {
@@ -182,7 +163,7 @@ impl JobHandle {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.write(job_id, &record)));
     }
 
-    pub fn dispatch(self: &Arc<Self>, spec: JobSpec, _o: WaitOpts) -> DispatchResult {
+    pub fn dispatch(self: &Arc<Self>, spec: JobSpec) -> String {
         let spec = Arc::new(spec);
         let job_id = random_uuid();
         let drive;
@@ -217,24 +198,7 @@ impl JobHandle {
         let (me, id) = (Arc::clone(self), job_id.clone());
         std::thread::spawn(move || me.watchdog(&id));
 
-        if spec.background == Some(true) {
-            return detach_result(&job_id);
-        }
-        let deadline = spec
-            .wait_ms
-            .map(clamp_wait)
-            .unwrap_or(self.deps.deadline_ms);
-        let st = self.block(ms(deadline), |st| {
-            st.job
-                .as_ref()
-                .is_none_or(|(_, j)| j.stage == Stage::Terminal)
-        });
-        match &st.job {
-            Some((_, j)) if j.stage == Stage::Terminal => {
-                DispatchResult::Output(j.output.clone().expect("terminal job has output"))
-            }
-            _ => detach_result(&job_id),
-        }
+        job_id
     }
 
     fn on_event(&self, job_id: &str, e: Event) {
@@ -348,7 +312,6 @@ impl JobHandle {
                 cost_estimated: true,
                 duration_ms: None,
                 job_id: Some(job_id.to_string()),
-                downgraded: None,
                 stderr_tail: None,
                 gate_result: None,
                 change_set: None,
@@ -435,7 +398,7 @@ impl JobHandle {
         poll_locked(&st, job_id)
     }
 
-    pub fn wait(&self, job_id: &str, timeout_ms: Option<f64>, _o: WaitOpts) -> PollResult {
+    pub fn wait(&self, job_id: &str, timeout_ms: Option<f64>) -> PollResult {
         let timeout = ms(clamp_wait(timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT)));
         let st = self.block(timeout, |st| {
             st.job

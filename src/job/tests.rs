@@ -4,7 +4,7 @@ use super::*;
 use crate::backends::types::{Backend, BackendResult, Event, ProgressSnapshotRaw, Spawned};
 use crate::output::derive_status;
 use crate::status_record::{FileStatusRecordWriter, job_record_path};
-use crate::types::{Capability, RawCursorJson, ResumeContext, RunStatus};
+use crate::types::{Capability, PollResult, RawCursorJson, ResumeContext};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread::sleep;
@@ -21,10 +21,8 @@ pub(crate) fn spec_of(over: impl FnOnce(&mut JobSpec)) -> JobSpec {
         path: None,
         head_before: None,
         gate: String::new(),
-        wait_ms: None,
         idle_ms: None,
         tool_idle_ms: None,
-        background: None,
         price_map: HashMap::new(),
         resume_context: ResumeContext {
             model: "composer-2.5".into(),
@@ -34,10 +32,6 @@ pub(crate) fn spec_of(over: impl FnOnce(&mut JobSpec)) -> JobSpec {
     };
     over(&mut s);
     s
-}
-
-pub(crate) fn bg(s: &mut JobSpec) {
-    s.background = Some(true);
 }
 
 enum Msg {
@@ -144,7 +138,6 @@ pub(crate) fn fake_finalize(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput
         cost_estimated: true,
         duration_ms: res.raw.duration_ms,
         job_id: ctx.job_id.clone(),
-        downgraded: None,
         stderr_tail: None,
         gate_result: None,
         change_set: None,
@@ -197,7 +190,7 @@ struct Setup {
 fn setup_with(f: impl FnOnce(&mut JobDeps)) -> Setup {
     let fake = Arc::new(FakeBackend::default());
     let spy = Arc::new(Spy::default());
-    let mut deps = JobDeps::new(fake.clone(), 200.0, None, None);
+    let mut deps = JobDeps::new(fake.clone(), None, None);
     deps.finalize = Arc::new(fake_finalize);
     deps.finalize_stall = Arc::new(fake_finalize);
     deps.status_writer = spy.clone();
@@ -213,10 +206,6 @@ fn setup() -> Setup {
     setup_with(|_| {})
 }
 
-fn id_of(r: &DispatchResult) -> String {
-    r.job_id().expect("job id").to_string()
-}
-
 fn settle(reg: &JobHandle, id: &str) -> String {
     for _ in 0..500 {
         let p = reg.poll(id);
@@ -228,6 +217,13 @@ fn settle(reg: &JobHandle, id: &str) -> String {
     "RUNNING".into()
 }
 
+fn terminal_text(reg: &JobHandle, id: &str) -> String {
+    match reg.poll(id) {
+        PollResult::Terminal { result, .. } => result.text,
+        other => panic!("expected terminal poll, got {other:?}"),
+    }
+}
+
 fn status_of(v: &serde_json::Value) -> &str {
     v["status"].as_str().unwrap()
 }
@@ -235,7 +231,7 @@ fn status_of(v: &serde_json::Value) -> &str {
 #[test]
 fn heartbeat_refreshes_running_record_and_stops_at_retirement() {
     let s = setup_with(|d| d.heartbeat_ms = 100);
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     assert_eq!(s.spy.len(), 1);
 
     sleep(Duration::from_millis(150));
@@ -257,9 +253,9 @@ fn heartbeat_refreshes_running_record_and_stops_at_retirement() {
 }
 
 #[test]
-fn background_dispatch_persists_start_and_terminal_records() {
+fn dispatch_persists_start_and_terminal_records() {
     let s = setup();
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     assert_eq!(s.spy.len(), 1);
     s.fake.handle(0).finish(done_ok());
     assert_eq!(settle(&s.reg, &id), "DONE");
@@ -270,7 +266,7 @@ fn background_dispatch_persists_start_and_terminal_records() {
 #[test]
 fn idle_watchdog_writes_a_stalled_terminal_record() {
     let s = setup_with(|d| d.idle_ms = Some(50.0));
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     assert_eq!(s.spy.len(), 1);
     assert_eq!(settle(&s.reg, &id), "STALLED");
     assert_eq!(s.fake.handle(0).killed(), ["SIGTERM"]);
@@ -281,7 +277,7 @@ fn idle_watchdog_writes_a_stalled_terminal_record() {
 #[test]
 fn cancel_persists_a_cancelled_terminal_record() {
     let s = setup();
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     assert_eq!(s.spy.len(), 1);
     s.reg.cancel(&id);
     assert_eq!(s.spy.len(), 2);
@@ -303,24 +299,17 @@ fn a_panicking_status_writer_does_not_affect_completion() {
         }
     }
     let bad = Arc::new(Bad(Mutex::new(0)));
-    let s = setup_with(|d| {
-        d.status_writer = bad.clone();
-        d.deadline_ms = 10_000.0;
-    });
-    let reg = Arc::clone(&s.reg);
-    let t = std::thread::spawn(move || reg.dispatch(spec_of(|_| {}), WaitOpts));
+    let s = setup_with(|d| d.status_writer = bad.clone());
+    let id = s.reg.dispatch(spec_of(|_| {}));
     s.fake.handle(0).finish(done_ok());
-    let DispatchResult::Output(out) = t.join().unwrap() else {
-        panic!("expected a RunOutput");
-    };
-    assert_eq!(out.status, RunStatus::Done);
+    assert_eq!(settle(&s.reg, &id), "DONE");
     assert_eq!(*bad.0.lock().unwrap(), 2);
 }
 
 #[test]
 fn progress_events_do_not_trigger_status_writes() {
     let s = setup();
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     s.fake.handle(0).progress(
         "shell",
         42.0,
@@ -338,7 +327,7 @@ fn progress_events_do_not_trigger_status_writes() {
 #[test]
 fn file_status_record_is_overwritten_from_running_to_terminal() {
     let s = setup_with(|d| d.status_writer = Arc::new(FileStatusRecordWriter));
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     let path = job_record_path(&id);
     let read = || -> serde_json::Value {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
@@ -354,18 +343,17 @@ fn file_status_record_is_overwritten_from_running_to_terminal() {
 }
 
 #[test]
-fn background_returns_immediately() {
-    let s = setup_with(|d| d.deadline_ms = 10_000.0);
+fn dispatch_returns_immediately() {
+    let s = setup();
     let t = Instant::now();
-    let r = s.reg.dispatch(spec_of(bg), WaitOpts);
-    assert_eq!(r.status_label(), "RUNNING");
+    s.reg.dispatch(spec_of(|_| {}));
     assert!(t.elapsed() < Duration::from_millis(1000));
 }
 
 #[test]
 fn cancel_sigterms_the_child_and_marks_cancelled() {
     let s = setup();
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     assert_eq!(s.reg.cancel(&id), "CANCELLED");
     assert_eq!(s.fake.handle(0).killed(), ["SIGTERM"]);
 }
@@ -373,19 +361,15 @@ fn cancel_sigterms_the_child_and_marks_cancelled() {
 #[test]
 fn idle_watchdog_sigterms_a_silent_job() {
     let s = setup_with(|d| d.idle_ms = Some(50.0));
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     assert_eq!(settle(&s.reg, &id), "STALLED");
     assert_eq!(s.fake.handle(0).killed(), ["SIGTERM"]);
 }
 
 #[test]
 fn a_stalled_jobs_text_summarizes_last_known_progress() {
-    let s = setup_with(|d| {
-        d.idle_ms = Some(100.0);
-        d.deadline_ms = 10_000.0;
-    });
-    let reg = Arc::clone(&s.reg);
-    let t = std::thread::spawn(move || reg.dispatch(spec_of(|_| {}), WaitOpts));
+    let s = setup_with(|d| d.idle_ms = Some(100.0));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     s.fake.handle(0).progress(
         "shell",
         42.0,
@@ -393,23 +377,22 @@ fn a_stalled_jobs_text_summarizes_last_known_progress() {
         &["src/foo.rs"],
         Some("thinking"),
     );
-    let DispatchResult::Output(out) = t.join().unwrap() else {
-        panic!("expected a RunOutput");
-    };
+    assert_eq!(settle(&s.reg, &id), "STALLED");
+    let text = terminal_text(&s.reg, &id);
     for needle in [
         "shell",
         "42 tokens",
         "src/foo.rs",
         "running the test suite now",
     ] {
-        assert!(out.text.contains(needle), "{needle:?} missing from {:?}", out.text);
+        assert!(text.contains(needle), "{needle:?} missing from {:?}", text);
     }
 }
 
 #[test]
 fn a_progress_event_rearms_the_idle_watchdog() {
     let s = setup_with(|d| d.idle_ms = Some(300.0));
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     sleep(Duration::from_millis(200));
     s.fake.handle(0).progress("shell", 1.0, None, &[], None);
     sleep(Duration::from_millis(200));
@@ -420,13 +403,7 @@ fn a_progress_event_rearms_the_idle_watchdog() {
 #[test]
 fn a_per_call_idle_override_beats_the_server_default() {
     let s = setup_with(|d| d.idle_ms = Some(50.0));
-    let id = id_of(&s.reg.dispatch(
-        spec_of(|s| {
-            bg(s);
-            s.idle_ms = Some(Some(400.0));
-        }),
-        WaitOpts,
-    ));
+    let id = s.reg.dispatch(spec_of(|s| s.idle_ms = Some(Some(400.0))));
     sleep(Duration::from_millis(150));
     assert!(s.fake.handle(0).killed().is_empty());
     assert_eq!(settle(&s.reg, &id), "STALLED");
@@ -436,13 +413,7 @@ fn a_per_call_idle_override_beats_the_server_default() {
 #[test]
 fn a_per_call_idle_null_disables_the_watchdog() {
     let s = setup_with(|d| d.idle_ms = Some(30.0));
-    let id = id_of(&s.reg.dispatch(
-        spec_of(|s| {
-            bg(s);
-            s.idle_ms = Some(None);
-        }),
-        WaitOpts,
-    ));
+    let id = s.reg.dispatch(spec_of(|s| s.idle_ms = Some(None)));
     sleep(Duration::from_millis(200));
     assert!(s.fake.handle(0).killed().is_empty());
     assert_eq!(s.reg.poll(&id), "RUNNING");
@@ -454,7 +425,7 @@ fn a_tool_in_flight_uses_the_tool_idle_window() {
         d.idle_ms = Some(50.0);
         d.tool_idle_ms = Some(400.0);
     });
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     s.fake
         .handle(0)
         .progress("shell", 1.0, None, &[], Some("running_tool"));
@@ -471,7 +442,7 @@ fn leaving_the_tool_phase_reverts_to_the_short_window() {
         d.idle_ms = Some(80.0);
         d.tool_idle_ms = Some(10_000.0);
     });
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     s.fake
         .handle(0)
         .progress("shell", 1.0, None, &[], Some("running_tool"));
@@ -494,13 +465,7 @@ fn a_per_call_tool_idle_override_applies_while_a_tool_is_in_flight() {
         d.idle_ms = Some(50.0);
         d.tool_idle_ms = Some(80.0);
     });
-    let id = id_of(&s.reg.dispatch(
-        spec_of(|s| {
-            bg(s);
-            s.tool_idle_ms = Some(Some(10_000.0));
-        }),
-        WaitOpts,
-    ));
+    let id = s.reg.dispatch(spec_of(|s| s.tool_idle_ms = Some(Some(10_000.0))));
     s.fake
         .handle(0)
         .progress("shell", 1.0, None, &[], Some("running_tool"));
@@ -512,7 +477,7 @@ fn a_per_call_tool_idle_override_applies_while_a_tool_is_in_flight() {
 #[test]
 fn raw_activity_rearms_the_watchdog() {
     let s = setup_with(|d| d.idle_ms = Some(300.0));
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     sleep(Duration::from_millis(200));
     s.fake.handle(0).activity();
     sleep(Duration::from_millis(200));
@@ -523,11 +488,11 @@ fn raw_activity_rearms_the_watchdog() {
 #[test]
 fn wait_returns_when_the_job_completes() {
     let s = setup();
-    let id = id_of(&s.reg.dispatch(spec_of(bg), WaitOpts));
+    let id = s.reg.dispatch(spec_of(|_| {}));
     let h = s.fake.handle(0);
     std::thread::spawn(move || {
         sleep(Duration::from_millis(30));
         h.finish(done_ok());
     });
-    assert_eq!(s.reg.wait(&id, Some(10_000.0), WaitOpts), "DONE");
+    assert_eq!(s.reg.wait(&id, Some(10_000.0)), "DONE");
 }

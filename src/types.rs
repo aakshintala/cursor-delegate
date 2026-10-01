@@ -135,8 +135,6 @@ pub struct RunOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub downgraded: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate_result: Option<GateResult>,
@@ -315,10 +313,8 @@ pub struct JobSpec {
     pub path: Option<String>,
     pub head_before: Option<String>,
     pub gate: String,
-    pub wait_ms: Option<f64>,
     pub idle_ms: Option<Option<f64>>,
     pub tool_idle_ms: Option<Option<f64>>,
-    pub background: Option<bool>,
     pub price_map: PriceMap,
     pub resume_context: ResumeContext,
 }
@@ -424,35 +420,6 @@ impl PollResult {
 impl PartialEq<&str> for PollResult {
     fn eq(&self, other: &&str) -> bool {
         self.status_label() == *other
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum DispatchResult {
-    Output(RunOutput),
-    Detached {
-        status: &'static str,
-        #[serde(rename = "jobId")]
-        job_id: String,
-        #[serde(rename = "busyPath", skip_serializing_if = "Option::is_none")]
-        busy_path: Option<String>,
-    },
-}
-
-impl DispatchResult {
-    pub fn status_label(&self) -> &str {
-        match self {
-            Self::Output(o) => o.status.as_str(),
-            Self::Detached { status, .. } => status,
-        }
-    }
-
-    pub fn job_id(&self) -> Option<&str> {
-        match self {
-            Self::Output(o) => o.job_id.as_deref(),
-            Self::Detached { job_id, .. } => Some(job_id),
-        }
     }
 }
 

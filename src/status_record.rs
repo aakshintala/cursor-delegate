@@ -38,12 +38,6 @@ pub fn file_status_record_writer() -> FileStatusRecordWriter {
     FileStatusRecordWriter
 }
 
-pub struct NoopStatusWriter;
-
-impl StatusRecordWriter for NoopStatusWriter {
-    fn write(&self, _job_id: &str, _record: &PollResult) {}
-}
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliResume {

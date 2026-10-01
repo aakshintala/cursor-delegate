@@ -6,7 +6,7 @@ use crate::backends::cursor::make_cursor_adapter;
 use crate::capability::map_capability;
 use crate::config::build_deps;
 use crate::git::capture_head;
-use crate::job::{JobDeps, JobHandle, WaitOpts};
+use crate::job::{JobDeps, JobHandle};
 use crate::lock::{self, AcquireError};
 use crate::models::resolve_model;
 use crate::prompt::status_block;
@@ -614,10 +614,8 @@ fn supervise(args: &[String]) -> i32 {
         path: Some(resolve_path(cwd)),
         head_before: capture_head(cwd, None),
         gate: gate.clone(),
-        wait_ms: None,
         idle_ms: None,
         tool_idle_ms: tool_idle_ms.map(Some),
-        background: Some(true),
         price_map: config.price_map.clone(),
         resume_context: ResumeContext {
             model: model.clone(),
@@ -632,7 +630,6 @@ fn supervise(args: &[String]) -> i32 {
     };
     let mut rd = JobDeps::new(
         Arc::new(make_cursor_adapter()),
-        60_000.0,
         idle(config.profile.idle_ms, 300_000.0),
         idle(config.profile.tool_idle_ms, 1_800_000.0),
     );
@@ -660,15 +657,11 @@ fn supervise(args: &[String]) -> i32 {
     });
     let registry = JobHandle::new(rd);
     let cancel_fd = install_cancel_handler();
-    let job = registry
-        .dispatch(spec, WaitOpts)
-        .job_id()
-        .expect("dispatch returns a job id")
-        .to_string();
+    let job = registry.dispatch(spec);
     if let Some(fd) = cancel_fd {
         spawn_cancel_waiter(Arc::clone(&registry), job.clone(), fd);
     }
-    while registry.wait(&job, None, WaitOpts) == "RUNNING" {}
+    while registry.wait(&job, None) == "RUNNING" {}
     0
 }
 

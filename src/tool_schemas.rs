@@ -37,7 +37,7 @@ pub fn build_run_input_schema(config: &Config) -> Value {
             },
             "requireNonClaude": {
                 "type": "boolean",
-                "description": "When true, hard-reject if the resolved model family is 'claude'. Default false.",
+                "description": "When true, hard-reject if the resolved model backend is 'claude'. Default false.",
             },
             "capability": {
                 "type": "string",

@@ -1,6 +1,5 @@
 use crate::types::{
-    Config, DoctorAccountInfo, DoctorAgentInfo, DoctorModelMenuInfo, DoctorPluginInfo,
-    DoctorReport, PluginRegistrationCheck,
+    Config, DoctorAccountInfo, DoctorAgentInfo, DoctorModelMenuInfo, DoctorPluginInfo, DoctorReport,
 };
 use std::process::Command;
 use std::time::Duration;
@@ -307,8 +306,6 @@ pub struct RunDoctorOpts<'a> {
     pub bin_exists: Option<&'a dyn Fn(&str) -> bool>,
     pub run_command: Option<&'a dyn Fn(&str, &[String]) -> AgentCommandResult>,
     pub read_package_version: Option<&'a dyn Fn() -> Result<String, String>>,
-    /// Removed with the plugin-registration check; kept so existing callers compile.
-    pub check_plugin_registration: Option<&'a dyn Fn() -> PluginRegistrationCheck>,
 }
 
 pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
@@ -359,16 +356,6 @@ pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
         .filter(|(_, e)| e.backend == "cursor")
         .map(|(id, _)| id.clone())
         .collect();
-    // The plugin-registration check is gone; the report keeps its JSON shape
-    // for the MCP doctor tool.
-    let plugin_registration = PluginRegistrationCheck {
-        enabled: true,
-        reachable: true,
-        resolves_to_plugin_install: true,
-        legacy_absent: true,
-        ok: true,
-        detail: vec![],
-    };
 
     if !bin_exists(&path) {
         failures.push(format!("cursor-agent not found at {path}"));
@@ -402,7 +389,6 @@ pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
                 note: PRICES_NOTE.into(),
                 error: Some("skipped: cursor-agent not found".into()),
             },
-            plugin_registration,
             warnings,
             failures,
         };
@@ -440,7 +426,6 @@ pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
         },
         account,
         model_menu,
-        plugin_registration,
         warnings,
         failures,
     }

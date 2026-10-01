@@ -324,7 +324,6 @@ fn run_doctor_happy_path() {
         resolve_bin: Some(&|_| "/fake/cursor-agent".into()),
         bin_exists: Some(&|_| true),
         read_package_version: Some(&|| Ok("0.1.0".into())),
-        check_plugin_registration: None,
         run_command: Some(&run),
     });
     assert!(report.ok);
@@ -362,7 +361,6 @@ fn run_doctor_ignores_unimplemented_backends() {
         resolve_bin: Some(&|_| "/fake/cursor-agent".into()),
         bin_exists: Some(&|_| true),
         read_package_version: Some(&|| Ok("0.1.0".into())),
-        check_plugin_registration: None,
         run_command: Some(&run),
     });
     assert!(report.ok);
@@ -378,7 +376,6 @@ fn run_doctor_missing_bin() {
         resolve_bin: Some(&|_| "/missing/cursor-agent".into()),
         bin_exists: Some(&|_| false),
         read_package_version: Some(&|| Ok("0.1.0".into())),
-        check_plugin_registration: None,
         run_command: Some(&|_, _| panic!("runCommand must not be called when bin is missing")),
     });
     assert!(!report.ok && !report.agent.found);
@@ -405,7 +402,6 @@ fn run_doctor_not_logged_in() {
         resolve_bin: Some(&|_| "/fake/cursor-agent".into()),
         bin_exists: Some(&|_| true),
         read_package_version: Some(&|| Ok("0.1.0".into())),
-        check_plugin_registration: None,
         run_command: Some(&run),
     });
     assert!(!report.ok && !report.account.logged_in);
@@ -431,7 +427,6 @@ fn run_doctor_model_list_warning() {
         resolve_bin: Some(&|_| "/fake/cursor-agent".into()),
         bin_exists: Some(&|_| true),
         read_package_version: Some(&|| Ok("0.1.0".into())),
-        check_plugin_registration: None,
         run_command: Some(&run),
     });
     assert!(report.ok);
@@ -457,7 +452,6 @@ fn run_doctor_without_deep() {
         resolve_bin: Some(&|_| "/fake/cursor-agent".into()),
         bin_exists: Some(&|_| true),
         read_package_version: Some(&|| Ok("0.1.0".into())),
-        check_plugin_registration: None,
         run_command: Some(&run),
     });
     assert!(report.ok);

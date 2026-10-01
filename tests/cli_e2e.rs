@@ -58,7 +58,7 @@ impl Env {
             .unwrap();
         let mut si = child.stdin.take().unwrap();
         if let Some(s) = stdin {
-            si.write_all(s.as_bytes()).unwrap();
+            let _ = si.write_all(s.as_bytes());
         }
         drop(si);
         child.wait_with_output().unwrap()

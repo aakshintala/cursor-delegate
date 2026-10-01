@@ -151,7 +151,6 @@ pub fn handle_call(
                 bin_exists: None,
                 run_command: None,
                 read_package_version: None,
-                check_plugin_registration: None,
             });
             serde_json::to_value(report).map_err(|e| e.to_string())
         }

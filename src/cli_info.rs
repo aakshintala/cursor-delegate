@@ -87,7 +87,6 @@ pub fn doctor_text(config: &Config) -> (String, i32) {
         bin_exists: None,
         run_command: None,
         read_package_version: None,
-        check_plugin_registration: None,
     });
     let mut text = String::new();
     let mut failed = false;
@@ -139,19 +138,19 @@ pub fn doctor_text(config: &Config) -> (String, i32) {
         }
     }
 
-    for backend in ["pi", "claude"] {
-        let n = config
-            .models
-            .values()
-            .filter(|e| e.backend == backend)
-            .count();
-        if n > 0 {
-            let word = if n == 1 { "model" } else { "models" };
-            text += &status_line(
-                "skip",
-                &format!("{backend}: backend not implemented ({n} {word})"),
-            );
+    // One skip line per backend that is not implemented yet, with its model count.
+    let mut skips: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for entry in config.models.values() {
+        if entry.backend != "cursor" {
+            *skips.entry(entry.backend.as_str()).or_default() += 1;
         }
+    }
+    for (backend, n) in &skips {
+        let word = if *n == 1 { "model" } else { "models" };
+        text += &status_line(
+            "skip",
+            &format!("{backend}: backend not implemented ({n} {word})"),
+        );
     }
 
     (text, i32::from(failed))

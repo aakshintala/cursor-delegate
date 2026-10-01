@@ -24,18 +24,6 @@ impl std::fmt::Display for NonClaudeViolationError {
 }
 impl std::error::Error for NonClaudeViolationError {}
 
-#[derive(Debug)]
-pub struct BackendNotImplementedError {
-    pub message: String,
-}
-
-impl std::fmt::Display for BackendNotImplementedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-impl std::error::Error for BackendNotImplementedError {}
-
 pub fn resolve_model(
     model: Option<&str>,
     require_non_claude: bool,
@@ -57,12 +45,11 @@ pub fn resolve_model(
         }));
     }
     if entry.backend != "cursor" {
-        return Err(Box::new(BackendNotImplementedError {
-            message: format!(
-                "model \"{model}\" uses backend \"{}\", which is not implemented yet",
-                entry.backend
-            ),
-        }));
+        return Err(format!(
+            "model \"{model}\" uses backend \"{}\", which is not implemented yet",
+            entry.backend
+        )
+        .into());
     }
     Ok(ResolvedModel {
         model,
@@ -202,9 +189,8 @@ mod tests {
     fn claude_backend_is_not_implemented() {
         let (d, m) = base();
         let e = resolve_model(Some("claude-sonnet-5-5"), false, &(d.as_str(), &m)).unwrap_err();
-        let be = e.downcast_ref::<BackendNotImplementedError>().unwrap();
         assert_eq!(
-            be.message,
+            e.to_string(),
             "model \"claude-sonnet-5-5\" uses backend \"claude\", which is not implemented yet"
         );
     }
@@ -214,9 +200,8 @@ mod tests {
         let (d, m) = base();
         let e =
             resolve_model(Some("openai-codex/gpt-6-luna"), false, &(d.as_str(), &m)).unwrap_err();
-        let be = e.downcast_ref::<BackendNotImplementedError>().unwrap();
         assert_eq!(
-            be.message,
+            e.to_string(),
             "model \"openai-codex/gpt-6-luna\" uses backend \"pi\", which is not implemented yet"
         );
     }

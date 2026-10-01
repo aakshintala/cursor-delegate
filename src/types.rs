@@ -322,24 +322,12 @@ pub struct DoctorModelMenuInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginRegistrationCheck {
-    pub enabled: bool,
-    pub reachable: bool,
-    pub resolves_to_plugin_install: bool,
-    pub legacy_absent: bool,
-    pub ok: bool,
-    pub detail: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DoctorReport {
     pub ok: bool,
     pub plugin: DoctorPluginInfo,
     pub agent: DoctorAgentInfo,
     pub account: DoctorAccountInfo,
     pub model_menu: DoctorModelMenuInfo,
-    pub plugin_registration: PluginRegistrationCheck,
     pub warnings: Vec<String>,
     pub failures: Vec<String>,
 }

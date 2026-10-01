@@ -1,0 +1,1 @@
+cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model composer-2.5 --workspace /Users/user/work/delegate-10-resume-cancel --mode ask 

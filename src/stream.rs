@@ -1,5 +1,22 @@
-use crate::types::RawCursorJson;
+use crate::types::Usage;
+use serde::Deserialize;
 use serde_json::Value;
+
+/// Each field decodes on its own: one malformed field reads as absent instead of voiding the rest.
+/// Shared by the cursor parser and, later, the Claude parser (#17).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct RawCursorJson {
+    #[serde(default, deserialize_with = "crate::util::lenient")]
+    pub is_error: Option<bool>,
+    #[serde(default, deserialize_with = "crate::util::lenient")]
+    pub duration_ms: Option<f64>,
+    #[serde(default, deserialize_with = "crate::util::lenient")]
+    pub result: Option<String>,
+    #[serde(default, deserialize_with = "crate::util::lenient")]
+    pub session_id: Option<String>,
+    #[serde(default, deserialize_with = "crate::util::lenient")]
+    pub usage: Option<Usage>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StreamState {
@@ -16,7 +33,7 @@ pub fn init_stream_state() -> StreamState {
 
 #[derive(Debug, Clone, Default)]
 pub struct ParsedLine {
-    pub result: Option<RawCursorJson>,
+    pub(crate) result: Option<RawCursorJson>,
     pub changed: bool,
 }
 

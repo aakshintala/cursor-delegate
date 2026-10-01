@@ -1,10 +1,10 @@
 // Ports of the job-registry tests that still apply to the single-job supervisor.
 
 use super::*;
-use crate::backends::types::{Backend, BackendResult, Event, ProgressSnapshotRaw, Spawned};
+use crate::backends::types::{BackendResult, Event, ProgressSnapshotRaw, Runner, Spawned};
 use crate::output::derive_status;
 use crate::status_record::{FileStatusRecordWriter, job_record_path};
-use crate::types::{Capability, PollResult, RawCursorJson, ResumeContext};
+use crate::types::{Capability, PollResult, ResumeContext};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread::sleep;
@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 pub(crate) fn spec_of(over: impl FnOnce(&mut JobSpec)) -> JobSpec {
     let mut s = JobSpec {
-        bin: "cursor-agent".into(),
-        argv: vec!["--print".into()],
+        bin: "agent".into(),
+        argv: vec!["run".into()],
         cwd: "/tmp".into(),
         model: "composer-2.5".into(),
         backend: "cursor".into(),
@@ -91,7 +91,7 @@ impl FakeBackend {
     }
 }
 
-impl Backend for FakeBackend {
+impl Runner for FakeBackend {
     fn run(&self, _spec: &JobSpec) -> Spawned {
         let (tx, rx) = mpsc::channel();
         if let Some(r) = &*self.auto.lock().unwrap() {
@@ -126,17 +126,16 @@ impl Backend for FakeBackend {
 }
 
 pub(crate) fn fake_finalize(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput {
-    let text = res.raw.result.clone().unwrap_or_default();
     RunOutput {
-        status: derive_status(&text, res.raw.is_error, res.clean_exit),
-        text,
-        session_id: res.raw.session_id.clone(),
+        status: derive_status(&res.text, res.is_error, res.clean_exit),
+        text: res.text.clone(),
+        session_id: res.session_id.clone(),
         backend: ctx.backend.clone(),
         model: ctx.model.clone(),
-        usage: res.raw.usage.clone(),
-        cost_usd: None,
-        cost_estimated: true,
-        duration_ms: res.raw.duration_ms,
+        usage: res.usage.clone(),
+        cost_usd: res.cost_usd,
+        cost_estimated: res.cost_usd.is_none(),
+        duration_ms: res.duration_ms,
         job_id: ctx.job_id.clone(),
         stderr_tail: None,
         gate_result: None,
@@ -147,13 +146,11 @@ pub(crate) fn fake_finalize(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput
 
 pub(crate) fn done_ok() -> BackendResult {
     BackendResult {
-        raw: RawCursorJson {
-            result: Some("ok\nSTATUS: DONE".into()),
-            is_error: Some(false),
-            ..Default::default()
-        },
+        text: "ok\nSTATUS: DONE".into(),
+        is_error: Some(false),
         clean_exit: true,
         stderr: String::new(),
+        ..Default::default()
     }
 }
 

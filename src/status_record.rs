@@ -66,7 +66,7 @@ pub struct CliRecord {
 
 /// Writes the CLI record for the one job this supervisor runs. A failed write exits the
 /// supervisor: the file is the only truth, so a job that cannot report is not worth running.
-/// ponytail: the cursor-agent child is orphaned on that exit; `watch` reports the dead supervisor.
+/// ponytail: the agent child is orphaned on that exit; `watch` reports the dead supervisor.
 pub struct CliRecordWriter {
     pub job_id: String,
     pub model: String,

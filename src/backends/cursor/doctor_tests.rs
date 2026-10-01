@@ -1,4 +1,5 @@
 use super::*;
+use crate::doctor::run_doctor;
 use crate::types::{Config, HostProfile, ModelEntry, Price};
 use std::collections::HashMap;
 

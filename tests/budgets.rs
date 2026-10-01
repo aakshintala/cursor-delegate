@@ -209,7 +209,13 @@ fn supervisor_rss_kb(pid: i32) -> u64 {
         .expect("rss parse")
 }
 
+/// Budgets are ~3x macOS medians; GitHub's Linux runners need 4x more headroom (#31).
 fn assert_wall_ms(cmd: &str, ms: u128, budget: u128) {
+    let budget = if std::env::var_os("CI").is_some() {
+        budget * 4
+    } else {
+        budget
+    };
     assert!(ms <= budget, "{cmd} took {ms}ms, budget {budget}ms");
 }
 

@@ -1,0 +1,1 @@
+cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model composer-2.5 --workspace /Users/user/work/delegate-13-contract --sandbox disabled --resume e2d994f1-ef61-48a1-b218-cde928b7cc82 

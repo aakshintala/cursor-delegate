@@ -3,7 +3,7 @@
   "name": "delegate",
   "version": "1.0.0",
   "description": "Local directory marketplace shipping the delegate CLI skill.",
-  "owner": { "name": "Amogh Akshintala", "email": "amogh.akshintala@databricks.com" },
+  "owner": { "name": "Amogh Akshintala", "email": "amoghakshintala@gmail.com" },
   "plugins": [
     {
       "name": "delegate",

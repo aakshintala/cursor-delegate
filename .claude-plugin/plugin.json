@@ -4,7 +4,7 @@
   "description": "Routes tasks to cursor-agent, pi, or Claude Code models through the delegate CLI.",
   "author": {
     "name": "Amogh Akshintala",
-    "email": "amogh.akshintala@databricks.com"
+    "email": "amoghakshintala@gmail.com"
   },
   "skills": [
     "./skills/delegate"

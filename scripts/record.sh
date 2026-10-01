@@ -19,9 +19,7 @@ case "$kind" in contract|recorded) ;; *) echo "bad fixture kind: $kind" >&2; exi
 out="$here/../tests/fixtures/$kind/$backend"
 mkdir -p "$out"
 
-prompt="$(cat)
-
-End your final message with a single trailing line that is exactly one of: STATUS: DONE, STATUS: DONE_WITH_CONCERNS, STATUS: BLOCKED, STATUS: NEEDS_CONTEXT, or STATUS: ERROR. When you need an answer from the orchestrator before you can proceed, put your question in the message body and end with STATUS: NEEDS_CONTEXT."
+prompt="$(cat)"
 
 case "$cap" in read-only|read-write) ;; *) echo "bad capability: $cap" >&2; exit 2 ;; esac
 
@@ -54,5 +52,17 @@ code=$?
 for f in "$out/$name".{stdout,stderr,argv}; do
   jq -rR -L "$here" 'include "redact"; (fromjson? | redact | tojson) // .' "$f" | sed "s/${USER:?}/user/g" > "$f.tmp" && mv "$f.tmp" "$f"
 done
+# Leak-scan the files just written, after redaction. On a hit the fixture
+# is deleted and recording fails: a fixture quoting a pattern is not
+# committed (no allowlist). The scan prints pattern names only, never
+# matched text.
+# NOTE: record.sh cd's into the recording cwd above, so run the scan from
+# the repo root: the identity patterns come from this repo's git config.
+leaks="$(cd "$here/.." && "$here/leak-scan.sh" "$out/$name.stdout" "$out/$name.stderr" "$out/$name.argv" 2>&1)" || {
+  [ -n "$leaks" ] && printf '%s\n' "$leaks" >&2
+  rm -f "$out/$name".{stdout,stderr,argv}
+  echo "record.sh: leak-scan hit, fixture deleted" >&2
+  exit 3
+}
 echo "session=$session exit=$code fixture=$out/$name.stdout"
 exit $code

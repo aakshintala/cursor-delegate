@@ -1,1 +1,0 @@
-claude -p --output-format stream-json --verbose --model claude-sonnet-5-5 --permission-mode plan --session-id 8ef50a4c-f74f-4f52-8bd2-15d5ae30bbdf 

@@ -1,1 +1,0 @@
-cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model grok-4.7-xhigh --workspace /Users/user/work/delegate-9-gate-lock --sandbox disabled 

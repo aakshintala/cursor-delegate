@@ -37,7 +37,7 @@ pub fn build_run_input_schema(config: &Config) -> Value {
             },
             "requireNonClaude": {
                 "type": "boolean",
-                "description": "When true, hard-reject if the resolved model family is 'claude'. Default false.",
+                "description": "When true, hard-reject if the resolved model backend is 'claude'. Default false.",
             },
             "capability": {
                 "type": "string",
@@ -228,7 +228,7 @@ mod tests {
             "composer-2.5".into(),
             ModelEntry {
                 label: "Composer 2.5".into(),
-                family: "composer".into(),
+                backend: "cursor".into(),
                 price: Price {
                     input: 0.5,
                     output: 2.5,
@@ -238,10 +238,10 @@ mod tests {
             },
         );
         m.insert(
-            "grok-4.5-xhigh".into(),
+            "grok-4.7-high".into(),
             ModelEntry {
-                label: "Grok 4.5".into(),
-                family: "grok".into(),
+                label: "Grok 4.7 High".into(),
+                backend: "cursor".into(),
                 price: Price {
                     input: 2.0,
                     output: 6.0,
@@ -267,7 +267,7 @@ mod tests {
     fn blurb_lists_id_label_prices() {
         let blurb = build_recommended_models_blurb(&models());
         assert!(blurb.contains("composer-2.5 — Composer 2.5 — $0.5/$2.5"));
-        assert!(blurb.contains("grok-4.5-xhigh — Grok 4.5 — $2/$6"));
+        assert!(blurb.contains("grok-4.7-high — Grok 4.7 High — $2/$6"));
     }
 
     #[test]
@@ -280,7 +280,7 @@ mod tests {
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect();
         ids.sort();
-        assert_eq!(ids, ["composer-2.5", "grok-4.5-xhigh"]);
+        assert_eq!(ids, ["composer-2.5", "grok-4.7-high"]);
         assert!(schema["properties"].get("tier").is_none());
         assert_eq!(schema["properties"]["requireNonClaude"]["type"], "boolean");
     }

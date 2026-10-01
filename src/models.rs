@@ -37,14 +37,23 @@ pub fn resolve_model(
             message: format!("model \"{model}\" is not in the allow-list"),
         }) as Box<dyn std::error::Error + Send + Sync>
     })?;
-    if require_non_claude && entry.family == "claude" {
+    if require_non_claude && entry.backend == "claude" {
         return Err(Box::new(NonClaudeViolationError {
-            message: format!("requireNonClaude is set but model \"{model}\" has family \"claude\""),
+            message: format!(
+                "requireNonClaude is set but model \"{model}\" has backend \"claude\""
+            ),
         }));
+    }
+    if entry.backend != "cursor" {
+        return Err(format!(
+            "model \"{model}\" uses backend \"{}\", which is not implemented yet",
+            entry.backend
+        )
+        .into());
     }
     Ok(ResolvedModel {
         model,
-        family: entry.family.clone(),
+        backend: entry.backend.clone(),
         price: entry.price,
     })
 }
@@ -98,24 +107,32 @@ mod tests {
             "composer-2.5".into(),
             ModelEntry {
                 label: "Composer 2.5".into(),
-                family: "composer".into(),
+                backend: "cursor".into(),
                 price: price(0.5, 2.5, 0.2, 0.0),
             },
         );
         models.insert(
-            "grok-4.5-xhigh".into(),
+            "grok-4.7-high".into(),
             ModelEntry {
-                label: "Grok 4.5".into(),
-                family: "grok".into(),
+                label: "Grok 4.7 High".into(),
+                backend: "cursor".into(),
                 price: price(2.0, 6.0, 0.5, 0.0),
             },
         );
         models.insert(
-            "claude-sonnet-4".into(),
+            "openai-codex/gpt-6-luna".into(),
             ModelEntry {
-                label: "Claude Sonnet 4".into(),
-                family: "claude".into(),
-                price: price(3.0, 15.0, 0.3, 0.0),
+                label: "GPT-6 Luna".into(),
+                backend: "pi".into(),
+                price: price(0.1, 0.5, 0.01, 0.125),
+            },
+        );
+        models.insert(
+            "claude-sonnet-5-5".into(),
+            ModelEntry {
+                label: "Claude Sonnet 5.5".into(),
+                backend: "claude".into(),
+                price: price(2.0, 10.0, 0.2, 2.5),
             },
         );
         ("composer-2.5".into(), models)
@@ -126,17 +143,17 @@ mod tests {
         let (d, m) = base();
         let r = resolve_model(None, false, &(d.as_str(), &m)).unwrap();
         assert_eq!(r.model, "composer-2.5");
-        assert_eq!(r.family, "composer");
+        assert_eq!(r.backend, "cursor");
         assert_eq!(r.price, m["composer-2.5"].price);
     }
 
     #[test]
-    fn allowed_id_resolves_with_family_and_price() {
+    fn allowed_id_resolves_with_backend_and_price() {
         let (d, m) = base();
-        let r = resolve_model(Some("grok-4.5-xhigh"), false, &(d.as_str(), &m)).unwrap();
-        assert_eq!(r.model, "grok-4.5-xhigh");
-        assert_eq!(r.family, "grok");
-        assert_eq!(r.price, m["grok-4.5-xhigh"].price);
+        let r = resolve_model(Some("grok-4.7-high"), false, &(d.as_str(), &m)).unwrap();
+        assert_eq!(r.model, "grok-4.7-high");
+        assert_eq!(r.backend, "cursor");
+        assert_eq!(r.price, m["grok-4.7-high"].price);
     }
 
     #[test]
@@ -149,30 +166,43 @@ mod tests {
     #[test]
     fn require_non_claude_rejects_explicit_claude() {
         let (d, m) = base();
-        let e = resolve_model(Some("claude-sonnet-4"), true, &(d.as_str(), &m)).unwrap_err();
+        let e = resolve_model(Some("claude-sonnet-5-5"), true, &(d.as_str(), &m)).unwrap_err();
         assert!(e.downcast_ref::<NonClaudeViolationError>().is_some());
     }
 
     #[test]
     fn require_non_claude_rejects_claude_default() {
         let (_, m) = base();
-        let e = resolve_model(None, true, &("claude-sonnet-4", &m)).unwrap_err();
+        let e = resolve_model(None, true, &("claude-sonnet-5-5", &m)).unwrap_err();
         assert!(e.downcast_ref::<NonClaudeViolationError>().is_some());
     }
 
     #[test]
     fn require_non_claude_passes_non_claude() {
         let (d, m) = base();
-        let r = resolve_model(Some("grok-4.5-xhigh"), true, &(d.as_str(), &m)).unwrap();
-        assert_eq!(r.model, "grok-4.5-xhigh");
-        assert_eq!(r.family, "grok");
+        let r = resolve_model(Some("grok-4.7-high"), true, &(d.as_str(), &m)).unwrap();
+        assert_eq!(r.model, "grok-4.7-high");
+        assert_eq!(r.backend, "cursor");
     }
 
     #[test]
-    fn require_non_claude_false_allows_claude() {
+    fn claude_backend_is_not_implemented() {
         let (d, m) = base();
-        let r = resolve_model(Some("claude-sonnet-4"), false, &(d.as_str(), &m)).unwrap();
-        assert_eq!(r.model, "claude-sonnet-4");
-        assert_eq!(r.family, "claude");
+        let e = resolve_model(Some("claude-sonnet-5-5"), false, &(d.as_str(), &m)).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "model \"claude-sonnet-5-5\" uses backend \"claude\", which is not implemented yet"
+        );
+    }
+
+    #[test]
+    fn pi_backend_is_not_implemented() {
+        let (d, m) = base();
+        let e =
+            resolve_model(Some("openai-codex/gpt-6-luna"), false, &(d.as_str(), &m)).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "model \"openai-codex/gpt-6-luna\" uses backend \"pi\", which is not implemented yet"
+        );
     }
 }

@@ -129,8 +129,6 @@ impl RunStatus {
             "BLOCKED" => Some(Self::Blocked),
             "NEEDS_CONTEXT" => Some(Self::NeedsContext),
             "ERROR" => Some(Self::Error),
-            "CANCELLED" => Some(Self::Cancelled),
-            "STALLED" => Some(Self::Stalled),
             _ => None,
         }
     }

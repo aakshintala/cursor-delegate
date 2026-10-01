@@ -13,7 +13,7 @@ use crate::runner::build_argv;
 use crate::status_record::{
     CliRecordWriter, cli_record_path, write_atomic, write_cancelled, write_supervisor_died,
 };
-use crate::types::{Capability, JobSpec, ResumeContext};
+use crate::types::{Capability, Config, JobSpec, ResumeContext};
 use crate::util::{json_compact, random_uuid, resolve_path};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -80,6 +80,13 @@ fn parse(args: &[String], flags: &[&str]) -> Result<(Vec<(String, String)>, Vec<
 
 fn flag<'a>(kv: &'a [(String, String)], name: &str) -> Option<&'a str> {
     kv.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+}
+
+/// `run`'s unknown-id message, reused wherever a model flag is resolved.
+fn unknown_model(config: &Config, model: &str) -> String {
+    let mut ids: Vec<_> = config.models.keys().cloned().collect();
+    ids.sort();
+    format!("unknown model {model}; valid models: {}", ids.join(", "))
 }
 
 fn capability(name: &str) -> Result<(Capability, &'static str), Usage> {
@@ -245,12 +252,7 @@ fn run(args: &[String]) -> Result<i32, Usage> {
         if e.downcast_ref::<crate::models::ModelNotAllowedError>()
             .is_some()
         {
-            let mut ids: Vec<_> = deps.config.models.keys().cloned().collect();
-            ids.sort();
-            return usage(format!(
-                "unknown model {model}; valid models: {}",
-                ids.join(", ")
-            ));
+            return usage(unknown_model(&deps.config, model));
         }
         return usage(format!("{e}"));
     }
@@ -349,27 +351,12 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
                      but {stored_model} ran on backend \"{a}\""
                 ));
             }
-            (_, None) => {
-                let mut ids: Vec<_> = deps.config.models.keys().cloned().collect();
-                ids.sort();
-                return usage(format!(
-                    "unknown model {model}; valid models: {}",
-                    ids.join(", ")
-                ));
-            }
+            (_, None) => return usage(unknown_model(&deps.config, &model)),
             _ => {}
         }
+        // Unknown ids are rejected above; what remains is a same-backend id the
+        // resolver may still refuse (e.g. a backend that is not implemented yet).
         if let Err(e) = resolve_model(Some(&model), false, &deps.config) {
-            if e.downcast_ref::<crate::models::ModelNotAllowedError>()
-                .is_some()
-            {
-                let mut ids: Vec<_> = deps.config.models.keys().cloned().collect();
-                ids.sort();
-                return usage(format!(
-                    "unknown model {model}; valid models: {}",
-                    ids.join(", ")
-                ));
-            }
             return usage(format!("{e}"));
         }
     }
@@ -406,21 +393,24 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
         Err(LaunchErr::Done(c)) => return Ok(c),
     };
     // B is spawned and its record exists; link A to it, preserving everything else.
-    // Re-read so a concurrent `watch` settle is not clobbered.
-    let Some(raw) = read_record(old_id) else {
-        return usage(format!("unknown job {old_id}"));
-    };
-    let mut old: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| Usage(format!("cannot read job {old_id}: {e}")))?;
-    if let Some(obj) = old.as_object_mut() {
-        obj.insert("supersededBy".into(), new_id.clone().into());
-    }
-    if let Err(e) = write_atomic(&cli_record_path(old_id), &json_compact(&old)) {
-        eprintln!(
-            "cannot write status record {}: {e}",
-            cli_record_path(old_id).display()
-        );
-        return Ok(1);
+    // Re-read so a concurrent `watch` settle is not clobbered. B is already running,
+    // so a failed link is a warning: the caller still needs B's id.
+    let link = read_record(old_id)
+        .ok_or_else(|| format!("record for {old_id} is gone"))
+        .and_then(|raw| {
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .map_err(|e| format!("cannot read job {old_id}: {e}"))
+        });
+    match link {
+        Ok(mut old) => {
+            if let Some(obj) = old.as_object_mut() {
+                obj.insert("supersededBy".into(), new_id.clone().into());
+            }
+            if let Err(e) = write_atomic(&cli_record_path(old_id), &json_compact(&old)) {
+                eprintln!("warning: cannot link {old_id} to {new_id}: {e}");
+            }
+        }
+        Err(reason) => eprintln!("warning: {reason}"),
     }
     println!("{new_id}");
     Ok(0)
@@ -447,18 +437,19 @@ fn cancel(args: &[String]) -> Result<i32, Usage> {
         return usage(format!("cannot cancel {id}: bad supervisor pid {pid}"));
     }
     let pid = pid as i32;
+    // A recycled pid must never be signalled: confirm it is still this job's supervisor.
+    // If it is gone or something else, there is nothing to signal; report CANCELLED.
+    if !supervisor_cmd_matches(pid, id) {
+        return cancel_write(id, &rec);
+    }
     // The supervisor is a session leader, so its pgid is its pid: one signal reaches it.
     // It translates that into `registry.cancel`, which SIGTERMs the agent's own group.
     unsafe {
         libc::kill(-pid, libc::SIGTERM);
     }
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(5) {
-        if let Some(final_rec) = terminal_record(id) {
-            println!("{final_rec}");
-            return Ok(0);
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    if let Some(final_rec) = wait_for_terminal_record(id, Duration::from_secs(5)) {
+        println!("{final_rec}");
+        return Ok(0);
     }
     // The supervisor is hung or already dead: take down its group and the agent's group
     // (a direct child still parented to the supervisor) with SIGKILL, then report CANCELLED.
@@ -470,19 +461,35 @@ fn cancel(args: &[String]) -> Result<i32, Usage> {
     unsafe {
         libc::kill(-pid, libc::SIGKILL);
     }
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(2) {
-        if let Some(final_rec) = terminal_record(id) {
-            println!("{final_rec}");
-            return Ok(0);
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    if let Some(final_rec) = wait_for_terminal_record(id, Duration::from_secs(2)) {
+        println!("{final_rec}");
+        return Ok(0);
     }
     let Some(raw) = read_record(id).and_then(|s| serde_json::from_str(&s).ok()) else {
         return usage(format!("unknown job {id}"));
     };
-    let prior: serde_json::Value = raw;
-    if let Err(e) = write_cancelled(id, &prior) {
+    cancel_write(id, &raw)
+}
+
+/// `ps -o command= -p <pid>` contains `__supervise <id>` only while this job's
+/// supervisor is that pid. A reused pid shows another command (or nothing).
+fn supervisor_cmd_matches(pid: i32, id: &str) -> bool {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output();
+    let Ok(out) = out else { return false };
+    if !out.status.success() {
+        return false;
+    }
+    let want = format!("__supervise {id}");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|l| l.contains(&want))
+}
+
+/// Nobody is left to finalize, so write the CANCELLED terminal record and print it.
+fn cancel_write(id: &str, prior: &serde_json::Value) -> Result<i32, Usage> {
+    if let Err(e) = write_cancelled(id, prior) {
         eprintln!(
             "cannot write status record {}: {e}",
             cli_record_path(id).display()
@@ -502,6 +509,19 @@ fn terminal_record(id: &str) -> Option<serde_json::Value> {
     } else {
         Some(v)
     }
+}
+
+/// Poll the record until it turns terminal, or `timeout` passes. Returns the terminal
+/// record, or `None` if it is still RUNNING when the time is up.
+fn wait_for_terminal_record(id: &str, timeout: Duration) -> Option<serde_json::Value> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Some(rec) = terminal_record(id) {
+            return Some(rec);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    terminal_record(id)
 }
 
 /// Direct children of `ppid`, via `ps`. Used only to find the agent after its supervisor

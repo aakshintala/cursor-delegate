@@ -812,16 +812,12 @@ while [ ! -e "$rel" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"late\nSTATUS: DONE","session_id":"s-9"}'
 "#;
 
-fn read_pid(dir: &std::path::Path, name: &str) -> i32 {
+fn read_pid(dir: &std::path::Path, name: &str) -> i64 {
     std::fs::read_to_string(dir.join(name))
         .unwrap()
         .trim()
         .parse()
         .unwrap()
-}
-
-fn gone(pid: i32) -> bool {
-    (unsafe { libc::kill(pid, 0) }) != 0
 }
 
 #[test]
@@ -835,7 +831,7 @@ fn cancel_kills_agent_and_grandchild() {
     assert_eq!(e.record(&id)["status"], "RUNNING");
     let agent = read_pid(&e.dir, "agent.pid");
     let grand = read_pid(&e.dir, "grandchild.pid");
-    assert!(!gone(agent) && !gone(grand), "agent {agent} grand {grand}");
+    assert!(alive(agent) && alive(grand), "agent {agent} grand {grand}");
 
     let out = e.delegate(&["cancel", &id], None);
     assert_eq!(
@@ -848,7 +844,39 @@ fn cancel_kills_agent_and_grandchild() {
     assert_eq!(final_rec["status"], "CANCELLED");
     assert_eq!(final_rec["result"]["status"], "CANCELLED");
     assert_eq!(final_rec["result"]["jobId"], id.as_str());
-    until("agent death", || gone(agent) && gone(grand));
+    until("agent death", || !alive(agent) && !alive(grand));
+    assert_eq!(e.record(&id)["status"], "CANCELLED");
+}
+
+#[test]
+fn cancel_sigkill_fallback_after_stopped_supervisor() {
+    let e = Env::new("cancel-kill");
+    std::fs::write(e.dir.join("agent.sh"), CANCEL_AGENT).unwrap();
+    let id = e.run("CANCELME");
+    until("agent spawn", || {
+        e.dir.join("agent.pid").exists() && e.dir.join("grandchild.pid").exists()
+    });
+    assert_eq!(e.record(&id)["status"], "RUNNING");
+    let sup = e.record(&id)["supervisorPid"].as_i64().unwrap() as i32;
+    let agent = read_pid(&e.dir, "agent.pid");
+    let grand = read_pid(&e.dir, "grandchild.pid");
+    // Freeze the supervisor so SIGTERM can never be answered: `cancel` must escalate
+    // through the 5s wait, SIGKILL both groups and write CANCELLED itself.
+    unsafe { libc::kill(sup, libc::SIGSTOP) };
+    let start = Instant::now();
+    let out = e.delegate(&["cancel", &id], None);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let final_rec: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(final_rec["status"], "CANCELLED");
+    assert_eq!(final_rec["result"]["status"], "CANCELLED");
+    // The full 5s SIGTERM wait elapsed: the fast supervisor path could not have fired.
+    assert!(start.elapsed() >= Duration::from_secs(5));
+    until("agent death", || !alive(agent) && !alive(grand));
     assert_eq!(e.record(&id)["status"], "CANCELLED");
 }
 

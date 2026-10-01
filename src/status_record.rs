@@ -151,21 +151,24 @@ pub fn write_supervisor_died(job_id: &str, prior: &serde_json::Value) -> std::io
     write_atomic(&cli_record_path(job_id), &json_compact(&rec))
 }
 
-/// A RUNNING record whose supervisor had to be SIGKILLed: nobody is left to finalize, so
-/// `cancel` writes the CANCELLED terminal record itself. Keeps the resume block (minus the
-/// session, which never produced a result), the supervisor pid and any chain links.
+/// A RUNNING record whose supervisor is gone or had to be SIGKILLed: nobody is left to
+/// finalize, so `cancel` writes the CANCELLED terminal record itself. Mutates a copy of
+/// the prior record: the status and result flip, the session (which never produced a
+/// result) is nulled, and everything else — resume, pids, chain links — is kept.
 pub fn write_cancelled(job_id: &str, prior: &serde_json::Value) -> std::io::Result<()> {
-    let resume = prior.get("resume").cloned().unwrap_or(serde_json::json!({
-        "model": "",
-        "cwd": "",
-        "capability": "read-only",
-        "sessionId": null,
-        "gate": "",
-        "toolIdleMs": null,
-    }));
-    let model = resume.get("model").and_then(|m| m.as_str()).unwrap_or("");
-    let mut obj = serde_json::Map::new();
+    let mut rec = prior.clone();
+    let Some(obj) = rec.as_object_mut() else {
+        return Err(std::io::Error::other("status record is not an object"));
+    };
+    let model = obj
+        .get("resume")
+        .and_then(|r| r.get("model"))
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_string();
     obj.insert("status".into(), "CANCELLED".into());
+    obj.remove("lastHeartbeatAt");
+    obj.remove("progress");
     obj.insert(
         "result".into(),
         serde_json::json!({
@@ -181,18 +184,8 @@ pub fn write_cancelled(job_id: &str, prior: &serde_json::Value) -> std::io::Resu
             "jobId": job_id,
         }),
     );
-    obj.insert(
-        "supervisorPid".into(),
-        prior.get("supervisorPid").cloned().unwrap_or_default(),
-    );
-    obj.insert("resume".into(), resume);
-    for key in ["resumedFrom", "supersededBy"] {
-        if let Some(v) = prior.get(key) {
-            obj.insert(key.into(), v.clone());
-        }
+    if let Some(resume) = obj.get_mut("resume").and_then(|r| r.as_object_mut()) {
+        resume.insert("sessionId".into(), serde_json::Value::Null);
     }
-    write_atomic(
-        &cli_record_path(job_id),
-        &json_compact(&serde_json::Value::Object(obj)),
-    )
+    write_atomic(&cli_record_path(job_id), &json_compact(&rec))
 }

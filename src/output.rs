@@ -154,6 +154,22 @@ mod tests {
     }
 
     #[test]
+    fn registry_only_statuses_never_come_from_the_agent() {
+        // CANCELLED/STALLED are set by the registry, never claimed by an agent line:
+        // `RUN_STATUSES` gates `parse`, so these fall through to the exit-based default.
+        assert_eq!(
+            derive_status("work\nSTATUS: CANCELLED", Some(false), true),
+            RunStatus::Done
+        );
+        assert_eq!(
+            derive_status("work\nSTATUS: STALLED", Some(false), true),
+            RunStatus::Done
+        );
+        assert!(RunStatus::parse("CANCELLED").is_none());
+        assert!(RunStatus::parse("STALLED").is_none());
+    }
+
+    #[test]
     fn empty_text_falls_through() {
         assert_eq!(derive_status("", Some(false), true), RunStatus::Done);
         assert_eq!(derive_status("   \n  ", Some(false), true), RunStatus::Done);

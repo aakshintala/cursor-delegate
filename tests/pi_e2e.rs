@@ -1,5 +1,5 @@
 //! Drives the real `delegate` binary as a process against a fake pi
-//! that replays `tests/fixtures/pi/plain-answer.stdout`.
+//! that replays `tests/fixtures/contract/pi/plain-answer.stdout`.
 
 use serde_json::Value;
 use std::io::Write;
@@ -51,7 +51,8 @@ impl Env {
     }
 
     fn fixture(&self) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/plain-answer.stdout")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/contract/pi/plain-answer.stdout")
     }
 
     /// Lets SLOW jobs finish; until then they stay RUNNING (10s cap).

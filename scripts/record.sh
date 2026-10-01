@@ -6,13 +6,17 @@
 # BACKEND: cursor | pi | claude. CAPABILITY: read-only | read-write (pi rejects read-only).
 # SESSION resumes that backend session; pi and claude get a fresh id when it is omitted.
 # CANCEL_AFTER=N sends the CLI SIGTERM after N seconds.
-# Writes tests/fixtures/BACKEND/NAME.{stdout,stderr,argv}; prints the session id (if chosen) and exit code.
+# Writes tests/fixtures/recorded/BACKEND/NAME.{stdout,stderr,argv} by default; prints the
+# session id (if chosen) and exit code. FIXTURE_KIND=contract writes to
+# tests/fixtures/contract/BACKEND/ instead, for curated parser-contract streams.
 set -uo pipefail
 
 [ $# -ge 4 ] || { sed -n 2,9p "$0"; exit 2; }
 backend=$1 model=$2 cap=$3 name=$4 cwd=${5:-$PWD} session=${6:-}
 here="$(cd "$(dirname "$0")" && pwd)"
-out="$here/../tests/fixtures/$backend"
+kind=${FIXTURE_KIND:-recorded}
+case "$kind" in contract|recorded) ;; *) echo "bad fixture kind: $kind" >&2; exit 2 ;; esac
+out="$here/../tests/fixtures/$kind/$backend"
 mkdir -p "$out"
 
 prompt="$(cat)

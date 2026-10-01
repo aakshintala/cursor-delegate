@@ -34,7 +34,7 @@ impl Env {
         std::fs::write(&claude, FAKE).unwrap();
         std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
         let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/claude/plan-plain-answer.stdout");
+            .join("tests/fixtures/contract/claude/plan-plain-answer.stdout");
         std::fs::copy(src, dir.join("fixture.stdout")).unwrap();
         std::fs::write(dir.join("fixture.exit"), "0\n").unwrap();
         Env { dir }

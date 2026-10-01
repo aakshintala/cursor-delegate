@@ -359,8 +359,8 @@ mod tests {
 
     #[test]
     fn fixtures_parse_to_a_normalized_result() {
-        let dir =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cursor");
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/contract/cursor");
         let mut files: Vec<_> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
             .map(|e| e.unwrap().path())
@@ -395,8 +395,8 @@ mod tests {
                 assert!(!res.text.is_empty(), "{stem}");
             }
 
-            if stem == "plain-answer" {
-                assert_eq!(
+            match stem.as_str() {
+                "plain-answer" => assert_eq!(
                     res,
                     BackendResult {
                         text: "391\n\nSTATUS: DONE".into(),
@@ -414,18 +414,61 @@ mod tests {
                         stderr: String::new(),
                         permission_denials: Vec::new(),
                     }
-                );
-            }
-            if stem == "tool-calls-fix" {
-                let mut state = init_stream_state();
-                for line in stdout.lines() {
-                    parse_line(line, &mut state);
+                ),
+                "tool-calls-fix" => {
+                    let mut state = init_stream_state();
+                    for line in stdout.lines() {
+                        parse_line(line, &mut state);
+                    }
+                    assert!(
+                        state.last_tool.is_some(),
+                        "tool-calls-fix progress saw no tool call"
+                    );
                 }
-                assert!(
-                    state.last_tool.is_some(),
-                    "tool-calls-fix progress saw no tool call"
-                );
+                "resume-answer" => {
+                    assert_eq!(res.text, "392\n\nSTATUS: DONE", "{stem}");
+                    assert_eq!(
+                        res.session_id.as_deref(),
+                        Some("54b96753-cec4-4820-ade9-aa49ebbb463a"),
+                        "{stem}"
+                    );
+                }
+                "needs-context" => {
+                    assert!(res.text.contains("STATUS: NEEDS_CONTEXT"), "{stem}");
+                    assert_eq!(
+                        res.session_id.as_deref(),
+                        Some("64cdc2ca-3627-49c7-a6de-d1ae305121f6"),
+                        "{stem}"
+                    );
+                }
+                "cancelled" => assert_eq!(res.text, NO_RESULT, "{stem}"),
+                // Empty stdout: the text is the stderr we kept.
+                "error-bad-model" => assert_eq!(res.text, stderr, "{stem}"),
+                other => panic!("unexpected cursor fixture: {other}"),
             }
+        }
+    }
+
+    #[test]
+    fn recorded_fixtures_parse_without_panicking() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/recorded/cursor");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("stdout"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no recorded cursor fixtures");
+
+        for path in files {
+            let stdout = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let stderr = std::fs::read_to_string(path.with_extension("stderr")).unwrap_or_default();
+            // Archive only: a recorded run must parse, under either exit
+            // code. No assertions on the result itself.
+            let _ = parse_stdout(&stdout, true, &stderr);
+            let _ = parse_stdout(&stdout, false, &stderr);
         }
     }
 }

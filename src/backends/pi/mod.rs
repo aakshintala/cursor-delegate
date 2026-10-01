@@ -384,7 +384,8 @@ mod tests {
 
     #[test]
     fn missing_header_falls_back_to_the_launch_session_id() {
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi");
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/contract/pi");
         let stdout = std::fs::read_to_string(dir.join("plain-answer.stdout")).unwrap();
         let stripped: String = stdout
             .lines()
@@ -465,7 +466,8 @@ mod tests {
 
     #[test]
     fn fixtures_parse_to_a_normalized_result() {
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi");
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/contract/pi");
         let mut files: Vec<_> = std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
             .map(|e| e.unwrap().path())
@@ -593,9 +595,9 @@ mod tests {
                     assert!(approx(res.cost_usd.unwrap(), 0.00101644), "{stem}");
                     assert_eq!(res.is_error, Some(false), "{stem}");
                 }
-                // Real runs (flywheel lanes, the opt-in live test): any finished run parses to a session,
+                // Opt-in live runs land in contract/: any finished run parses to a session,
                 // a reported cost and a trailing STATUS line.
-                other if other.starts_with("lane-") || other.starts_with("live-") => {
+                other if other.starts_with("live-") => {
                     assert_eq!(res.is_error, Some(false), "{stem}");
                     assert!(res.session_id.is_some(), "{stem}");
                     assert!(res.cost_usd.unwrap() > 0.0, "{stem}");
@@ -607,9 +609,33 @@ mod tests {
     }
 
     #[test]
+    fn recorded_fixtures_parse_without_panicking() {
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recorded/pi");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("stdout"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no recorded pi fixtures");
+
+        for path in files {
+            let stdout = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let stderr = std::fs::read_to_string(path.with_extension("stderr")).unwrap_or_default();
+            // Archive only: a recorded run must parse, under either exit
+            // code. No assertions on the result itself.
+            let _ = parse_stdout(&stdout, true, &stderr);
+            let _ = parse_stdout(&stdout, false, &stderr);
+        }
+    }
+
+    #[test]
     fn every_pi_fixture_has_progress() {
         // tool_execution_start sets last_tool; assistant text sets last_assistant.
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi");
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/contract/pi");
         for stem in [
             "plain-answer",
             "tool-calls-fix",

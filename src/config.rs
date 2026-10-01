@@ -1,4 +1,3 @@
-use crate::safety::CliConfig;
 use crate::types::{Config, HostProfile, ModelEntry, Price, PriceMap};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -71,31 +70,6 @@ fn opt_str(
             .as_str()
             .map(|s| Some(s.to_string()))
             .ok_or_else(|| format!("invalid config: {where_}.{field} must be a string")),
-    }
-}
-
-fn opt_str_array(
-    obj: &serde_json::Map<String, Value>,
-    field: &str,
-    where_: &str,
-) -> Result<Option<Vec<String>>, String> {
-    match obj.get(field) {
-        None => Ok(None),
-        Some(v) => {
-            let arr = v.as_array().ok_or_else(|| {
-                format!("invalid config: {where_}.{field} must be an array of strings")
-            })?;
-            if arr.iter().any(|x| !x.is_string()) {
-                return Err(format!(
-                    "invalid config: {where_}.{field} must be an array of strings"
-                ));
-            }
-            Ok(Some(
-                arr.iter()
-                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                    .collect(),
-            ))
-        }
     }
 }
 
@@ -199,20 +173,8 @@ fn decode_host_profile(raw: Option<&Value>) -> Result<HostProfile, String> {
     if let Some(models) = obj.get("models") {
         profile.models = Some(decode_models(models, "host-profile.models")?);
     }
-    if let Some(deny) = opt_str_array(obj, "requiredDeny", "host-profile")? {
-        profile.required_deny = Some(deny);
-    }
-    if let Some(p) = opt_str(obj, "promptPreamble", "host-profile")? {
-        profile.prompt_preamble = Some(p);
-    }
-    if let Some(v) = opt_str_array(obj, "verifyCommands", "host-profile")? {
-        profile.verify_commands = Some(v);
-    }
     if let Some(g) = opt_str(obj, "gate", "host-profile")? {
         profile.gate = Some(g);
-    }
-    if let Some(d) = opt_finite(obj, "deadlineMs", "host-profile")? {
-        profile.deadline_ms = Some(d);
     }
     if let Some(i) = opt_finite_or_null(obj, "idleMs", "host-profile")? {
         profile.idle_ms = Some(i);
@@ -300,39 +262,31 @@ pub fn load_config(
     })
 }
 
-pub fn load_cli_config(
-    path: &str,
-    read_file: Option<&dyn Fn(&str) -> Result<String, IoErr>>,
-) -> Result<Option<CliConfig>, Box<dyn std::error::Error + Send + Sync>> {
-    let fallback = |p: &str| default_read_file(p);
-    let rf: &dyn Fn(&str) -> Result<String, IoErr> = match read_file {
-        Some(f) => f,
-        None => &fallback,
-    };
-    let raw = match read_json(rf, path)? {
-        None => return Ok(None),
-        Some(v) => v,
-    };
-    if !is_record(&raw) {
-        return Err(format!("invalid config: {path} must be an object").into());
-    }
-    if let Some(perms) = raw.get("permissions") {
-        if !perms.is_null() && !is_record(perms) {
-            return Err(format!("invalid config: {path}.permissions must be an object").into());
-        }
-        if let Some(deny) = perms.get("deny")
-            && !deny.is_null()
-        {
-            let arr = deny.as_array();
-            if arr.is_none() || arr.unwrap().iter().any(|x| !x.is_string()) {
-                return Err(format!(
-                    "invalid config: {path}.permissions.deny must be an array of strings"
-                )
-                .into());
+pub struct CliDeps {
+    pub config: Config,
+}
+
+pub fn build_deps() -> Result<CliDeps, Box<dyn std::error::Error + Send + Sync>> {
+    let bundled = BUNDLED_MODELS_JSON.to_string();
+    let config = load_config(LoadConfigOpts {
+        models_path: "<bundled>/models.json".into(),
+        host_profile_path: None,
+        read_file: Some(Box::new(move |path: &str| {
+            if path == "<bundled>/models.json" {
+                Ok(bundled.clone())
+            } else {
+                std::fs::read_to_string(path).map_err(|e| IoErr {
+                    code: if e.kind() == std::io::ErrorKind::NotFound {
+                        Some("ENOENT".into())
+                    } else {
+                        None
+                    },
+                    message: e.to_string(),
+                })
             }
-        }
-    }
-    Ok(Some(serde_json::from_value(raw)?))
+        })),
+    })?;
+    Ok(CliDeps { config })
 }
 
 #[cfg(test)]
@@ -398,8 +352,7 @@ mod tests {
                         "price": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 }
                     }
                 },
-                "requiredDeny": ["rm -rf /"],
-                "deadlineMs": 5000
+                "idleMs": 1000
             })
             .to_string(),
         );
@@ -414,11 +367,7 @@ mod tests {
         assert!(cfg.models.contains_key("openai-codex/gpt-6-luna"));
         assert_eq!(cfg.models["openai-codex/gpt-6-luna"].backend, "pi");
         assert_eq!(cfg.price_map["openai-codex/gpt-6-luna"].output, 30.0);
-        assert_eq!(
-            cfg.profile.required_deny.as_ref().unwrap(),
-            &["rm -rf /".to_string()]
-        );
-        assert_eq!(cfg.profile.deadline_ms, Some(5000.0));
+        assert_eq!(cfg.profile.idle_ms, Some(Some(1000.0)));
     }
 
     #[test]
@@ -492,46 +441,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_deadline() {
-        let mut files = HashMap::new();
-        files.insert("/m.json".into(), MODELS_DEFAULT.into());
-        files.insert(
-            "/p.json".into(),
-            serde_json::json!({"deadlineMs":"soon"}).to_string(),
-        );
-        let e = load_config(LoadConfigOpts {
-            models_path: "/m.json".into(),
-            host_profile_path: Some("/p.json".into()),
-            read_file: Some(reader(files)),
-        })
-        .unwrap_err();
-        assert!(e.to_string().contains("deadlineMs"));
-    }
-
-    #[test]
-    fn rejects_bad_required_deny() {
-        let mut files = HashMap::new();
-        files.insert("/m.json".into(), MODELS_DEFAULT.into());
-        files.insert(
-            "/p.json".into(),
-            serde_json::json!({"requiredDeny":[1,2]}).to_string(),
-        );
-        let e = load_config(LoadConfigOpts {
-            models_path: "/m.json".into(),
-            host_profile_path: Some("/p.json".into()),
-            read_file: Some(reader(files)),
-        })
-        .unwrap_err();
-        assert!(e.to_string().contains("requiredDeny"));
-    }
-
-    #[test]
     fn accepts_null_idle() {
         let mut files = HashMap::new();
         files.insert("/m.json".into(), MODELS_DEFAULT.into());
         files.insert(
             "/p.json".into(),
-            serde_json::json!({"idleMs":null,"toolIdleMs":null,"deadlineMs":1000}).to_string(),
+            serde_json::json!({"idleMs":null,"toolIdleMs":null}).to_string(),
         );
         let cfg = load_config(LoadConfigOpts {
             models_path: "/m.json".into(),

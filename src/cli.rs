@@ -1,15 +1,15 @@
 //! The `delegate` CLI: `run` starts a detached supervisor, `watch` reads job records.
 //! The record file under `$TMPDIR/delegate-jobs/` is the only link between them.
 
+use crate::backends::cursor::build_argv;
 use crate::backends::cursor::make_cursor_adapter;
 use crate::capability::map_capability;
+use crate::config::build_deps;
 use crate::git::capture_head;
-use crate::index::build_deps;
-use crate::job_registry::{JobRegistry, RegistryDeps, WaitOpts};
+use crate::job::{JobDeps, JobHandle, WaitOpts};
 use crate::lock::{self, AcquireError};
 use crate::models::resolve_model;
 use crate::prompt::status_block;
-use crate::runner::build_argv;
 use crate::status_record::{
     CliRecordWriter, cli_record_path, write_atomic, write_cancelled, write_supervisor_died,
 };
@@ -246,7 +246,7 @@ fn run(args: &[String]) -> Result<i32, Usage> {
             return Ok(1);
         }
     };
-    if let Err(e) = resolve_model(Some(model), false, &deps.config) {
+    if let Err(e) = resolve_model(Some(model), &deps.config) {
         // An unknown id lists the valid ids; any other failure (e.g. a model on
         // a backend that is not implemented yet) prints the actual error.
         if e.downcast_ref::<crate::models::ModelNotAllowedError>()
@@ -356,7 +356,7 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
         }
         // Unknown ids are rejected above; what remains is a same-backend id the
         // resolver may still refuse (e.g. a backend that is not implemented yet).
-        if let Err(e) = resolve_model(Some(&model), false, &deps.config) {
+        if let Err(e) = resolve_model(Some(&model), &deps.config) {
             return usage(format!("{e}"));
         }
     }
@@ -603,7 +603,7 @@ fn supervise(args: &[String]) -> i32 {
     let capres = map_capability(cap, true);
     let session = flag(&kv, "--session").map(str::to_string);
     let resumed_from = flag(&kv, "--resumed-from").map(str::to_string);
-    let argv = build_argv(model, &capres.flags, &[], session.as_deref(), &prompt);
+    let argv = build_argv(model, &capres.flags, session.as_deref(), &prompt);
     let spec = JobSpec {
         bin: crate::cursor_bin::resolve_cursor_bin(None),
         argv,
@@ -614,23 +614,15 @@ fn supervise(args: &[String]) -> i32 {
         path: Some(resolve_path(cwd)),
         head_before: capture_head(cwd, None),
         gate: gate.clone(),
-        allow_partial_commit: false,
         wait_ms: None,
         idle_ms: None,
         tool_idle_ms: tool_idle_ms.map(Some),
         background: Some(true),
         price_map: config.price_map.clone(),
-        downgraded: false,
-        worktree_name: None,
         resume_context: ResumeContext {
             model: model.clone(),
-            require_non_claude: None,
             capability: cap,
-            allow_unsandboxed: true,
-            isolation: crate::types::Isolation::None,
-            verify_commands: None,
             gate: gate.clone(),
-            allow_partial_commit: false,
         },
     };
 
@@ -638,9 +630,9 @@ fn supervise(args: &[String]) -> i32 {
         None => Some(d),
         Some(inner) => inner,
     };
-    let mut rd = RegistryDeps::new(
+    let mut rd = JobDeps::new(
         Arc::new(make_cursor_adapter()),
-        config.profile.deadline_ms.unwrap_or(60_000.0),
+        60_000.0,
         idle(config.profile.idle_ms, 300_000.0),
         idle(config.profile.tool_idle_ms, 1_800_000.0),
     );
@@ -666,19 +658,17 @@ fn supervise(args: &[String]) -> i32 {
         tool_idle_ms,
         resumed_from: resumed_from.clone(),
     });
-    let registry = JobRegistry::new(rd);
+    let registry = JobHandle::new(rd);
     let cancel_fd = install_cancel_handler();
-    let Some(job) = registry
-        .dispatch(spec, WaitOpts::default())
+    let job = registry
+        .dispatch(spec, WaitOpts)
         .job_id()
-        .map(str::to_string)
-    else {
-        return fail("another write job holds this cwd".into());
-    };
+        .expect("dispatch returns a job id")
+        .to_string();
     if let Some(fd) = cancel_fd {
         spawn_cancel_waiter(Arc::clone(&registry), job.clone(), fd);
     }
-    while registry.wait(&job, None, WaitOpts::default()) == "RUNNING" {}
+    while registry.wait(&job, None, WaitOpts) == "RUNNING" {}
     0
 }
 
@@ -724,7 +714,7 @@ fn install_cancel_handler() -> Option<i32> {
     Some(fds[0])
 }
 
-fn spawn_cancel_waiter(registry: Arc<JobRegistry>, job: String, fd: i32) {
+fn spawn_cancel_waiter(registry: Arc<JobHandle>, job: String, fd: i32) {
     std::thread::spawn(move || {
         let mut b = 0u8;
         // One SIGTERM is all `cancel` ever sends before escalating to SIGKILL.

@@ -1,7 +1,7 @@
 //! Human-readable `delegate models` and `delegate doctor` output.
 
+use crate::config::build_deps;
 use crate::doctor::{RunDoctorOpts, run_doctor};
-use crate::index::build_deps;
 use crate::types::Config;
 
 /// `delegate models`: an aligned table of id, label, backend and $/1M prices.

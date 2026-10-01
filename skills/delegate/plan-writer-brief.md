@@ -1,8 +1,9 @@
 # Plan-writer brief
 
 Read this only when delegating plan authoring. Copy everything inside the fence
-into `cursor_run.prompt`, replacing every `«...»` placeholder. Use
-`model: "cursor-grok-4.6-xhigh"` unless the user names another allow-list id.
+into a file, replacing every `«...»` placeholder, and send it with
+`delegate run --model grok-4.7-xhigh --capability read-only < brief.md` (`read-write` only
+when the plan must land in the repo). Answer a `NEEDS_CONTEXT` job with `delegate resume`.
 
 A filled brief replaces placeholders and nothing else. `«PLAN_OUTPUT_PATH»`
 becomes `docs/plans/2026-07-09-delegate-skill.md`; `«Feature Name»` becomes the
@@ -18,6 +19,7 @@ implementation plan markdown file — planning document only.
 
 ## Hard rules
 
+- Do not delegate further.
 - Do NOT implement code. Do NOT modify source. Do NOT run build/test commands
   except read-only inspection needed to name exact paths (`ls`, `rg`, `Read`).
 - Do NOT commit. Do NOT create git commits or PRs.
@@ -29,7 +31,7 @@ implementation plan markdown file — planning document only.
 
   STATUS: NEEDS_CONTEXT
 
-  The orchestrator will answer via cursor_answer and you will resume. Do not
+  The orchestrator will answer with `delegate resume` and you will continue. Do not
   guess through blockers.
 - When the plan is complete, end with:
 
@@ -117,7 +119,7 @@ After writing all tasks, include a `## Self-Review` section that checks:
 
 ## Tool surface you may reference (do not re-implement)
 
-«DOCUMENT_ASSUMED_APIS — e.g. cursor_run model allow-list, requireNonClaude, cursor_answer, NEEDS_CONTEXT»
+«DOCUMENT_ASSUMED_APIS — e.g. the `delegate` commands and model ids the plan relies on»
 
 Begin now. Read only what you need to name exact paths, then write the full plan.
 ```

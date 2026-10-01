@@ -254,6 +254,13 @@ fn run(args: &[String]) -> Result<i32, Usage> {
         }
         return usage(format!("{e}"));
     }
+    // pi runs with the user's full configuration and cannot enforce read-only:
+    // reject before anything detaches.
+    if cap_name == "read-only"
+        && deps.config.models.get(model).map(|e| e.backend.as_str()) == Some("pi")
+    {
+        return usage("pi cannot enforce read-only");
+    }
     let mut prompt = String::new();
     match flag(&kv, "--prompt-file") {
         Some(f) => prompt = std::fs::read_to_string(f).map_err(|e| Usage(format!("{f}: {e}")))?,
@@ -360,6 +367,13 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
     }
     let cap_name = flag(&kv, "--capability").unwrap_or(&stored_cap).to_string();
     capability(&cap_name)?;
+    // pi runs with the user's full configuration and cannot enforce read-only:
+    // reject before anything detaches.
+    if cap_name == "read-only"
+        && deps.config.models.get(&model).map(|e| e.backend.as_str()) == Some("pi")
+    {
+        return usage("pi cannot enforce read-only");
+    }
     let gate = flag(&kv, "--gate").unwrap_or(&stored_gate).to_string();
 
     let mut prompt = String::new();

@@ -145,12 +145,14 @@ pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
             note: String::new(),
             error: None,
         },
+        sections: vec![],
         warnings,
         failures,
     };
 
-    // Cursor is the only implemented backend. `from_name` None is a skip in the CLI.
-    if let Some(backend) = crate::backends::Backend::from_name("cursor") {
+    // Every implemented backend that has models in the table. `from_name`
+    // None (claude until #17) is a skip in the CLI.
+    for backend in crate::backends::Backend::implemented_in(opts.config) {
         backend.fill_doctor(&mut report, &opts);
     }
     report.ok = report.failures.is_empty();

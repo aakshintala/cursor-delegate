@@ -155,12 +155,11 @@ mod tests {
     }
 
     #[test]
-    fn pi_backend_is_not_implemented() {
+    fn pi_backend_resolves() {
         let (d, m) = base();
-        let e = resolve_model(Some("openai-codex/gpt-6-luna"), &(d.as_str(), &m)).unwrap_err();
-        assert_eq!(
-            e.to_string(),
-            "model \"openai-codex/gpt-6-luna\" uses backend \"pi\", which is not implemented yet"
-        );
+        let r = resolve_model(Some("openai-codex/gpt-6-luna"), &(d.as_str(), &m)).unwrap();
+        assert_eq!(r.model, "openai-codex/gpt-6-luna");
+        assert_eq!(r.backend, "pi");
+        assert_eq!(r.price, m["openai-codex/gpt-6-luna"].price);
     }
 }

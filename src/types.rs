@@ -224,6 +224,17 @@ pub struct DoctorModelMenuInfo {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DoctorBackendSection {
+    pub backend: String,
+    pub found: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+    pub version_error: Option<String>,
+    pub model_failures: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorReport {
@@ -232,6 +243,8 @@ pub struct DoctorReport {
     pub agent: DoctorAgentInfo,
     pub account: DoctorAccountInfo,
     pub model_menu: DoctorModelMenuInfo,
+    #[serde(default)]
+    pub sections: Vec<DoctorBackendSection>,
     pub warnings: Vec<String>,
     pub failures: Vec<String>,
 }

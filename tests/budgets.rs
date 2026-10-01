@@ -55,6 +55,14 @@ esac
     )
 }
 
+const FAKE_PI: &str = r#"#!/bin/sh
+case "$1" in
+  --version) echo "0.99.2" ;;
+  auth) exit 0 ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+"#;
+
 const RUN_BUDGET_MS: u128 = 102; // measured: 34ms on M-series Mac, budget 3x
 const RESUME_BUDGET_MS: u128 = 93; // measured: 31ms on M-series Mac, budget 3x
 const CANCEL_BUDGET_MS: u128 = 192; // measured: 64ms on M-series Mac, budget 3x
@@ -83,6 +91,9 @@ impl Env {
         let agent = dir.join("agent.sh");
         std::fs::write(&agent, agent_script).unwrap();
         std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pi = dir.join("pi.sh");
+        std::fs::write(&pi, FAKE_PI).unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
     }
 
@@ -124,6 +135,7 @@ impl Env {
             .current_dir(&self.dir)
             .env("TMPDIR", &self.dir)
             .env("CURSOR_AGENT_BIN", self.dir.join("agent.sh"))
+            .env("PI_BIN", self.dir.join("pi.sh"))
             .env("DELEGATE_HEARTBEAT_MS", "100");
         if args.first() == Some(&"models") || args.first() == Some(&"doctor") {
             cmd.env(

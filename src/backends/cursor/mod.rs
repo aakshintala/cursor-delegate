@@ -4,7 +4,7 @@ pub(crate) mod doctor;
 
 use super::types::{BackendResult, Event, EventFn, ProgressSnapshotRaw, Spawned};
 use crate::stream::{RawCursorJson, StreamState, init_stream_state, parse_line};
-use crate::types::{Capability, JobSpec};
+use crate::types::JobSpec;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -34,16 +34,8 @@ pub(crate) fn resolve_bin(r#override: Option<&str>) -> String {
         .into_owned()
 }
 
-pub(crate) fn argv(
-    model: &str,
-    capability: Capability,
-    session: Option<&str>,
-    prompt: &str,
-) -> (Vec<String>, bool) {
-    let (flags, is_write): (&[&str], bool) = match capability {
-        Capability::Ask => (&["--mode", "ask", "--force"], false),
-        Capability::WriteUnsandboxed => (&["--sandbox", "disabled", "--force"], true),
-    };
+/// Argv for a run. Every job runs with writes enabled: `--sandbox disabled --force`.
+pub(crate) fn argv(model: &str, session: Option<&str>, prompt: &str) -> Vec<String> {
     let mut args = vec![
         "--print".into(),
         "--output-format".into(),
@@ -52,15 +44,17 @@ pub(crate) fn argv(
         "--approve-mcps".into(),
         "--model".into(),
         model.to_string(),
+        "--sandbox".into(),
+        "disabled".into(),
+        "--force".into(),
     ];
-    args.extend(flags.iter().map(|s| (*s).to_string()));
     if let Some(s) = session {
         args.push("--resume".into());
         args.push(s.to_string());
     }
     args.push("--".into());
     args.push(prompt.to_string());
-    (args, is_write)
+    args
 }
 
 pub(crate) fn spawn(spec: &JobSpec) -> Spawned {
@@ -206,11 +200,15 @@ mod tests {
     }
 
     #[test]
-    fn ask_is_read_only_and_write_disables_the_sandbox() {
-        let (ask, ask_write) = argv("composer-2.5", Capability::Ask, None, "hi");
-        assert!(!ask_write);
+    fn write_argv_disables_the_sandbox() {
+        let write = argv("composer-2.5", Some("sid"), "go");
+        let pair = |a, b| write.windows(2).any(|w| w[0] == a && w[1] == b);
+        assert!(pair("--sandbox", "disabled"));
+        assert!(pair("--resume", "sid"));
+        assert!(!pair("--sandbox", "enabled"));
+        assert!(write.contains(&"--force".to_string()));
         assert_eq!(
-            ask.iter().map(String::as_str).collect::<Vec<_>>(),
+            write.iter().map(String::as_str).collect::<Vec<_>>(),
             [
                 "--print",
                 "--output-format",
@@ -219,24 +217,15 @@ mod tests {
                 "--approve-mcps",
                 "--model",
                 "composer-2.5",
-                "--mode",
-                "ask",
+                "--sandbox",
+                "disabled",
                 "--force",
+                "--resume",
+                "sid",
                 "--",
-                "hi",
+                "go",
             ]
         );
-        let (write, is_write) = argv(
-            "composer-2.5",
-            Capability::WriteUnsandboxed,
-            Some("sid"),
-            "go",
-        );
-        assert!(is_write);
-        let pair = |a, b| write.windows(2).any(|w| w[0] == a && w[1] == b);
-        assert!(pair("--sandbox", "disabled"));
-        assert!(pair("--resume", "sid"));
-        assert!(!pair("--sandbox", "enabled"));
     }
 
     #[test]

@@ -5,13 +5,12 @@ use crate::backends::Backend;
 use crate::config::build_deps;
 use crate::git::capture_head;
 use crate::job::{JobDeps, JobHandle};
-use crate::lock::{self, AcquireError};
 use crate::models::resolve_model;
 use crate::prompt::status_block;
 use crate::status_record::{
     CliRecordWriter, job_record_path, write_atomic, write_cancelled, write_supervisor_died,
 };
-use crate::types::{Capability, Config, JobSpec, ResumeContext};
+use crate::types::{Config, JobSpec, ResumeContext};
 use crate::util::{json_compact, random_uuid, resolve_path};
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -21,8 +20,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: delegate run --model M [--capability read-only|read-write] [--cwd D] [--gate CMD] [--tool-idle-ms N] [--prompt-file F]
-       delegate resume <jobId> [--model M] [--capability C] [--gate CMD] [--prompt-file F | stdin]
+const USAGE: &str =
+    "usage: delegate run --model M [--cwd D] [--gate CMD] [--tool-idle-ms N] [--prompt-file F]
+       delegate resume <jobId> [--model M] [--gate CMD] [--prompt-file F | stdin]
        delegate cancel <jobId>
        delegate watch <jobId>... [--timeout S]
        delegate models
@@ -87,27 +87,7 @@ fn unknown_model(config: &Config, model: &str) -> String {
     format!("unknown model {model}; valid models: {}", ids.join(", "))
 }
 
-fn capability(name: &str) -> Result<(Capability, &'static str), Usage> {
-    match name {
-        "read-only" => Ok((Capability::Ask, "read-only")),
-        "read-write" => Ok((Capability::WriteUnsandboxed, "read-write")),
-        o => usage(format!(
-            "unknown capability {o}: use read-only or read-write"
-        )),
-    }
-}
-
-/// pi runs with the user's full configuration and cannot enforce read-only:
-/// reject before anything detaches.
-fn reject_pi_read_only(config: &Config, model: &str, cap_name: &str) -> Result<(), Usage> {
-    if cap_name == "read-only" && config.models.get(model).map(|e| e.backend.as_str()) == Some("pi")
-    {
-        return usage("pi cannot enforce read-only");
-    }
-    Ok(())
-}
-
-/// The shared half of `run` and `resume`: lock, stash the prompt, spawn the detached
+/// The shared half of `run` and `resume`: stash the prompt, spawn the detached
 /// supervisor and wait for its first record. Returns the new job id. `Usage` means exit
 /// 2; `Done` means the reason is already on stderr, return the code.
 enum LaunchErr {
@@ -118,7 +98,6 @@ enum LaunchErr {
 struct LaunchParams<'a> {
     prompt: &'a str,
     model: &'a str,
-    cap_name: &'a str,
     cwd: &'a str,
     gate: &'a str,
     tool_idle_ms: Option<f64>,
@@ -128,23 +107,6 @@ struct LaunchParams<'a> {
 
 fn launch(p: LaunchParams<'_>) -> Result<String, LaunchErr> {
     let id = random_uuid();
-    // Read-only jobs take no lock. A read-write job locks before the supervisor exists, so a
-    // second writer in this cwd is refused even if the first supervisor has not started.
-    let held = if p.cap_name == "read-write" {
-        match lock::try_acquire(p.cwd, &id) {
-            Ok(lock) => Some(lock),
-            Err(AcquireError::Busy { holder }) => {
-                eprintln!("BUSY {holder}");
-                return Err(LaunchErr::Done(3));
-            }
-            Err(AcquireError::Io(e)) => {
-                eprintln!("cannot lock {}: {e}", p.cwd);
-                return Err(LaunchErr::Done(1));
-            }
-        }
-    } else {
-        None
-    };
     let record = job_record_path(&id);
     let dir = record.parent().expect("record has a parent");
     if let Err(e) = std::fs::create_dir_all(dir) {
@@ -166,7 +128,6 @@ fn launch(p: LaunchParams<'_>) -> Result<String, LaunchErr> {
         "__supervise".to_string(),
         id.clone(),
         p.model.to_string(),
-        p.cap_name.to_string(),
         p.cwd.to_string(),
     ];
     if !p.gate.is_empty() {
@@ -186,12 +147,7 @@ fn launch(p: LaunchParams<'_>) -> Result<String, LaunchErr> {
         supervise_args.push("--resumed-from".into());
         supervise_args.push(r.to_string());
     }
-    if let Some(lock) = &held {
-        supervise_args.push("--lock-fd".into());
-        supervise_args.push(lock.fd().to_string());
-    }
     // Own session and process group, stdio closed: the supervisor outlives this process.
-    // `held` stays open across the spawn so the inherited fd remains locked.
     let exe = std::env::current_exe().map_err(|e| LaunchErr::Usage(e.to_string()))?;
     let mut child = unsafe {
         Command::new(exe)
@@ -227,7 +183,6 @@ fn run(args: &[String]) -> Result<i32, Usage> {
         args,
         &[
             "--model",
-            "--capability",
             "--cwd",
             "--gate",
             "--tool-idle-ms",
@@ -237,8 +192,6 @@ fn run(args: &[String]) -> Result<i32, Usage> {
     let Some(model) = flag(&kv, "--model") else {
         return usage("--model is required");
     };
-    let cap_name = flag(&kv, "--capability").unwrap_or("read-only");
-    capability(cap_name)?;
     let gate = flag(&kv, "--gate").unwrap_or("").to_string();
     let tool_idle_ms = match flag(&kv, "--tool-idle-ms") {
         None => None,
@@ -264,7 +217,6 @@ fn run(args: &[String]) -> Result<i32, Usage> {
         }
         return usage(format!("{e}"));
     }
-    reject_pi_read_only(&deps.config, model, cap_name)?;
     let mut prompt = String::new();
     match flag(&kv, "--prompt-file") {
         Some(f) => prompt = std::fs::read_to_string(f).map_err(|e| Usage(format!("{f}: {e}")))?,
@@ -288,7 +240,6 @@ fn run(args: &[String]) -> Result<i32, Usage> {
     match launch(LaunchParams {
         prompt: &prompt,
         model,
-        cap_name,
         cwd: &cwd,
         gate: &gate,
         tool_idle_ms,
@@ -305,10 +256,7 @@ fn run(args: &[String]) -> Result<i32, Usage> {
 }
 
 fn resume(args: &[String]) -> Result<i32, Usage> {
-    let (kv, pos) = parse(
-        args,
-        &["--model", "--capability", "--gate", "--prompt-file"],
-    )?;
+    let (kv, pos) = parse(args, &["--model", "--gate", "--prompt-file"])?;
     let [old_id] = pos.as_slice() else {
         return usage(USAGE);
     };
@@ -329,10 +277,6 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
     };
     let session = session.to_string();
     let stored_cwd = old["resume"]["cwd"].as_str().unwrap_or("").to_string();
-    let stored_cap = old["resume"]["capability"]
-        .as_str()
-        .unwrap_or("read-only")
-        .to_string();
     let stored_gate = old["resume"]["gate"].as_str().unwrap_or("").to_string();
     let tool_idle_ms = old["resume"]["toolIdleMs"].as_f64();
 
@@ -369,9 +313,6 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
             return usage(format!("{e}"));
         }
     }
-    let cap_name = flag(&kv, "--capability").unwrap_or(&stored_cap).to_string();
-    capability(&cap_name)?;
-    reject_pi_read_only(&deps.config, &model, &cap_name)?;
     let gate = flag(&kv, "--gate").unwrap_or(&stored_gate).to_string();
 
     let mut prompt = String::new();
@@ -391,7 +332,6 @@ fn resume(args: &[String]) -> Result<i32, Usage> {
     let new_id = match launch(LaunchParams {
         prompt: &prompt,
         model: &model,
-        cap_name: &cap_name,
         cwd: &stored_cwd,
         gate: &gate,
         tool_idle_ms,
@@ -561,30 +501,13 @@ fn supervise(args: &[String]) -> i32 {
     };
     let (kv, pos) = match parse(
         args,
-        &[
-            "--gate",
-            "--tool-idle-ms",
-            "--lock-fd",
-            "--session",
-            "--resumed-from",
-        ],
+        &["--gate", "--tool-idle-ms", "--session", "--resumed-from"],
     ) {
         Ok(v) => v,
         Err(Usage(m)) => return fail(m),
     };
-    let [id, model, cap_name, cwd] = pos.as_slice() else {
+    let [id, model, cwd] = pos.as_slice() else {
         return 2;
-    };
-    // Hold the inherited lock until this process ends. CLOEXEC stops the agent and the gate
-    // from keeping it after we die.
-    let _lock = match flag(&kv, "--lock-fd") {
-        None => None,
-        Some(s) => {
-            let Ok(fd) = s.parse::<i32>() else {
-                return 2;
-            };
-            Some(unsafe { lock::adopt(fd) })
-        }
     };
     let gate = flag(&kv, "--gate").unwrap_or("").to_string();
     let tool_idle_ms = match flag(&kv, "--tool-idle-ms") {
@@ -593,10 +516,6 @@ fn supervise(args: &[String]) -> i32 {
             Ok(n) if n.is_finite() && n > 0.0 => Some(n),
             _ => return 2,
         },
-    };
-    let (cap, cap_label) = match capability(cap_name) {
-        Ok(c) => c,
-        Err(Usage(m)) => return fail(m),
     };
     let deps = match build_deps() {
         Ok(d) => d,
@@ -622,14 +541,13 @@ fn supervise(args: &[String]) -> i32 {
     };
     let session = flag(&kv, "--session").map(str::to_string);
     let resumed_from = flag(&kv, "--resumed-from").map(str::to_string);
-    let (argv, is_write) = backend.argv(model, cap, session.as_deref(), &prompt);
+    let argv = backend.argv(model, session.as_deref(), &prompt);
     let spec = JobSpec {
         bin: backend.bin(),
         argv,
         cwd: cwd.clone(),
         model: model.clone(),
         backend: backend.name().into(),
-        is_write,
         path: Some(resolve_path(cwd)),
         head_before: capture_head(cwd, None),
         gate: gate.clone(),
@@ -638,7 +556,6 @@ fn supervise(args: &[String]) -> i32 {
         price_map: config.price_map.clone(),
         resume_context: ResumeContext {
             model: model.clone(),
-            capability: cap,
             gate: gate.clone(),
         },
     };
@@ -669,7 +586,6 @@ fn supervise(args: &[String]) -> i32 {
         job_id: id.clone(),
         model: model.clone(),
         cwd: cwd.clone(),
-        capability: cap_label,
         gate: gate.clone(),
         tool_idle_ms,
         resumed_from: resumed_from.clone(),

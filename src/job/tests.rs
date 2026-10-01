@@ -4,7 +4,7 @@ use super::*;
 use crate::backends::types::{BackendResult, Event, ProgressSnapshotRaw, Runner, Spawned};
 use crate::output::derive_status;
 use crate::status_record::{FileStatusRecordWriter, job_record_path};
-use crate::types::{Capability, PollResult, ResumeContext};
+use crate::types::{PollResult, ResumeContext};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread::sleep;
@@ -17,7 +17,6 @@ pub(crate) fn spec_of(over: impl FnOnce(&mut JobSpec)) -> JobSpec {
         cwd: "/tmp".into(),
         model: "composer-2.5".into(),
         backend: "cursor".into(),
-        is_write: false,
         path: None,
         head_before: None,
         gate: String::new(),
@@ -26,7 +25,6 @@ pub(crate) fn spec_of(over: impl FnOnce(&mut JobSpec)) -> JobSpec {
         price_map: HashMap::new(),
         resume_context: ResumeContext {
             model: "composer-2.5".into(),
-            capability: Capability::Ask,
             gate: String::new(),
         },
     };

@@ -11,7 +11,6 @@ pub mod finalize;
 pub mod gate;
 pub mod git;
 pub mod job;
-pub mod lock;
 pub mod models;
 pub mod output;
 pub mod pricing;

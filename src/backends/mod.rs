@@ -3,7 +3,7 @@ pub mod cursor;
 pub mod pi;
 pub mod types;
 
-use crate::types::{Capability, JobSpec};
+use crate::types::JobSpec;
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
@@ -49,18 +49,12 @@ impl Backend {
         }
     }
 
-    /// Full argv (without the binary) and whether the run may write.
-    pub fn argv(
-        self,
-        model: &str,
-        capability: Capability,
-        session: Option<&str>,
-        prompt: &str,
-    ) -> (Vec<String>, bool) {
+    /// Full argv (without the binary). Every job runs with writes enabled.
+    pub fn argv(self, model: &str, session: Option<&str>, prompt: &str) -> Vec<String> {
         match self {
-            Self::Cursor => cursor::argv(model, capability, session, prompt),
-            Self::Pi => pi::argv(model, capability, session, prompt),
-            Self::Claude => claude::argv(model, capability, session, prompt),
+            Self::Cursor => cursor::argv(model, session, prompt),
+            Self::Pi => pi::argv(model, session, prompt),
+            Self::Claude => claude::argv(model, session, prompt),
         }
     }
 

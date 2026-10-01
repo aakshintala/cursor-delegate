@@ -66,7 +66,7 @@ pub fn finalize_run(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput {
         out.gate_result = Some(gate_result);
     }
     if let Some(cs) = compute_change_set(ctx) {
-        if ctx.is_write && !cs.new_commits.is_empty() && !cs.uncommitted_files.is_empty() {
+        if !cs.new_commits.is_empty() && !cs.uncommitted_files.is_empty() {
             concerns.push(
                 "Commits landed but the working tree is still dirty: HEAD may not reflect a \
 complete, buildable change. Review the uncommitted files."
@@ -127,7 +127,6 @@ pub fn default_finalize_ctx(cwd: &str, model: &str, backend: &str) -> FinalizeCt
     FinalizeCtx {
         cwd: cwd.into(),
         head_before: None,
-        is_write: false,
         gate: String::new(),
         gate_timeout_ms: None,
         model: model.into(),
@@ -226,10 +225,9 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_commit_downgrades_write() {
+    fn incomplete_commit_downgrades() {
         let d = dirty();
         let mut ctx = base_ctx();
-        ctx.is_write = true;
         ctx.head_before = Some("aaa".into());
         ctx.git_delta = Some(Box::new(move |_, _| Some(d.clone())));
         let out = finalize_run(&ok_result(), &ctx);
@@ -280,25 +278,11 @@ mod tests {
     }
 
     #[test]
-    fn read_only_never_concern() {
-        let d = dirty();
-        let mut ctx = base_ctx();
-        ctx.is_write = false;
-        ctx.head_before = Some("aaa".into());
-        ctx.git_delta = Some(Box::new(move |_, _| Some(d.clone())));
-        let out = finalize_run(&ok_result(), &ctx);
-        assert_eq!(out.status, RunStatus::Done);
-        assert!(out.concerns.is_none());
-        assert!(out.change_set.is_some());
-    }
-
-    #[test]
-    fn write_clean_tree_no_concern() {
+    fn clean_tree_no_concern() {
         let mut clean = dirty();
         clean.uncommitted_files.clear();
         clean.dirty_after = false;
         let mut ctx = base_ctx();
-        ctx.is_write = true;
         ctx.head_before = Some("aaa".into());
         ctx.git_delta = Some(Box::new(move |_, _| Some(clean.clone())));
         let out = finalize_run(&ok_result(), &ctx);
@@ -349,7 +333,6 @@ mod tests {
     fn stall_computes_changeset() {
         let d = dirty();
         let mut ctx = base_ctx();
-        ctx.is_write = true;
         ctx.head_before = Some("aaa".into());
         ctx.git_delta = Some(Box::new(move |_, _| Some(d.clone())));
         let out = finalize_stall(&stalled(), &ctx);
@@ -381,7 +364,6 @@ mod tests {
     fn stall_no_incomplete_commit() {
         let d = dirty();
         let mut ctx = base_ctx();
-        ctx.is_write = true;
         ctx.head_before = Some("aaa".into());
         ctx.git_delta = Some(Box::new(move |_, _| Some(d.clone())));
         let out = finalize_stall(&stalled(), &ctx);

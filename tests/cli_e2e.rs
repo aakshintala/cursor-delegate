@@ -2,11 +2,13 @@
 
 use serde_json::Value;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const FAKE_AGENT: &str = r#"#!/bin/sh
+printf '%s\n' "$@" > "$(dirname "$0")/argv.txt"
 printf '%s\n' '{"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{"args":{"command":"ls"}}}}'
 case "$*" in
   *SLOW*) sleep 1 ;;
@@ -29,12 +31,13 @@ impl Env {
         std::fs::create_dir_all(&dir).unwrap();
         let agent = dir.join("agent.sh");
         std::fs::write(&agent, FAKE_AGENT).unwrap();
-        Command::new("chmod")
-            .arg("+x")
-            .arg(&agent)
-            .status()
-            .unwrap();
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
+    }
+
+    fn argv(&self) -> Vec<String> {
+        let s = std::fs::read_to_string(self.dir.join("argv.txt")).unwrap();
+        s.lines().map(String::from).collect()
     }
 
     fn delegate(&self, args: &[&str], stdin: Option<&str>) -> Output {
@@ -80,6 +83,12 @@ impl Env {
     }
 }
 
+impl Drop for Env {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 fn alive(pid: i64) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
@@ -106,6 +115,9 @@ fn run_returns_id_while_job_runs_then_it_finishes() {
     assert!(alive(pid), "supervisor must outlive `run`");
 
     let done = e.wait_terminal(&id);
+    let argv = e.argv();
+    assert!(argv.windows(2).any(|w| w == ["--mode", "ask"]), "{argv:?}");
+    assert!(argv.contains(&"--force".to_string()), "{argv:?}");
     assert_eq!(done["status"], "DONE");
     assert_eq!(done["result"]["text"], "391\nSTATUS: DONE");
     assert_eq!(done["result"]["jobId"], id.as_str());
@@ -159,6 +171,12 @@ fn read_write_and_prompt_file() {
     let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
     assert_eq!(e.record(&id)["resume"]["capability"], "read-write");
     e.wait_terminal(&id);
+    let argv = e.argv();
+    assert!(
+        argv.windows(2).any(|w| w == ["--sandbox", "disabled"]),
+        "{argv:?}"
+    );
+    assert!(argv.contains(&"--force".to_string()), "{argv:?}");
 }
 
 #[test]

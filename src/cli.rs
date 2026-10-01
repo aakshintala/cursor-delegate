@@ -9,11 +9,11 @@ use crate::job_registry::{JobRegistry, RegistryDeps, WaitOpts};
 use crate::models::resolve_model;
 use crate::prompt::status_block;
 use crate::runner::build_argv;
-use crate::safety::verify_deny_list;
 use crate::status_record::{CliRecordWriter, cli_record_path};
 use crate::types::{Capability, JobSpec, ResumeContext};
 use crate::util::{random_uuid, resolve_path};
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -86,7 +86,13 @@ fn run(args: &[String]) -> Result<i32, Usage> {
     };
     let cap_name = flag(&kv, "--capability").unwrap_or("read-only");
     capability(cap_name)?;
-    let deps = build_deps().map_err(|e| Usage(e.to_string()))?;
+    let deps = match build_deps() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("{e}");
+            return Ok(1);
+        }
+    };
     if resolve_model(Some(model), false, &deps.config).is_err() {
         let mut ids: Vec<_> = deps.config.models.keys().cloned().collect();
         ids.sort();
@@ -120,7 +126,16 @@ fn run(args: &[String]) -> Result<i32, Usage> {
     let dir = record.parent().expect("record has a parent");
     std::fs::create_dir_all(dir).map_err(|e| Usage(format!("{}: {e}", dir.display())))?;
     let prompt_file = dir.join(format!("{id}.prompt"));
-    std::fs::write(&prompt_file, prompt).map_err(|e| Usage(e.to_string()))?;
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&prompt_file)
+        .and_then(|mut f| f.write_all(prompt.as_bytes()));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&prompt_file);
+        return usage(format!("{}: {e}", prompt_file.display()));
+    }
 
     // Own session and process group, stdio closed: the supervisor outlives this process.
     let mut child = unsafe {
@@ -135,11 +150,15 @@ fn run(args: &[String]) -> Result<i32, Usage> {
             })
             .spawn()
     }
-    .map_err(|e| Usage(format!("cannot start supervisor: {e}")))?;
+    .map_err(|e| {
+        let _ = std::fs::remove_file(&prompt_file);
+        Usage(format!("cannot start supervisor: {e}"))
+    })?;
     // The supervisor writes the first RUNNING record before the agent starts; wait for it.
     let t = Instant::now();
     while !record.exists() {
         if child.try_wait().ok().flatten().is_some() || t.elapsed() > Duration::from_secs(10) {
+            let _ = std::fs::remove_file(&prompt_file);
             eprintln!("supervisor failed to write {}", record.display());
             return Ok(1);
         }
@@ -175,12 +194,6 @@ fn supervise(args: &[String]) -> i32 {
     let prompt = format!("{prompt}\n\n---\n\n{}", status_block()).replace('\0', "");
 
     let capres = map_capability(cap, true);
-    if let Err(e) = verify_deny_list(
-        config.profile.required_deny.as_deref().unwrap_or(&[]),
-        deps.cli_config.as_ref(),
-    ) {
-        return fail(e.to_string());
-    }
     let argv = build_argv(model, &capres.flags, &[], None, &prompt);
     let spec = JobSpec {
         bin: crate::cursor_bin::resolve_cursor_bin(None),

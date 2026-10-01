@@ -19,6 +19,31 @@ pub fn make_cursor_adapter() -> CursorAdapter {
     CursorAdapter
 }
 
+pub fn build_argv(
+    model: &str,
+    cap_flags: &[String],
+    session: Option<&str>,
+    prompt: &str,
+) -> Vec<String> {
+    let mut argv = vec![
+        "--print".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--trust".into(),
+        "--approve-mcps".into(),
+        "--model".into(),
+        model.to_string(),
+    ];
+    argv.extend(cap_flags.iter().cloned());
+    if let Some(s) = session {
+        argv.push("--resume".into());
+        argv.push(s.to_string());
+    }
+    argv.push("--".into());
+    argv.push(prompt.to_string());
+    argv
+}
+
 impl Backend for CursorAdapter {
     fn run(&self, spec: &JobSpec) -> Spawned {
         let spawned = Command::new(&spec.bin)
@@ -188,8 +213,7 @@ mod tests {
 
     #[test]
     fn spawn_failure_is_an_error_result() {
-        let spec =
-            crate::job_registry::tests::spec_of(|s| s.bin = "/nonexistent/cursor-agent".into());
+        let spec = crate::job::tests::spec_of(|s| s.bin = "/nonexistent/cursor-agent".into());
         let spawned = CursorAdapter.run(&spec);
         (spawned.kill)();
         let res = (spawned.drive)(&|_| {});
@@ -199,7 +223,7 @@ mod tests {
 
     #[test]
     fn real_child_runs_and_sigterm_kills_it() {
-        let spec = crate::job_registry::tests::spec_of(|s| {
+        let spec = crate::job::tests::spec_of(|s| {
             s.bin = "/bin/sh".into();
             s.argv = vec!["-c".into(), "exec sleep 30".into()];
         });

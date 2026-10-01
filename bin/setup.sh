@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
-# cursor-delegate setup: build the server and install the plugin with Claude Code at user scope.
-# Portable across Linux/macOS. Needs a Rust toolchain (cargo).
-#
-#   DRY_RUN=1 ./bin/setup.sh   # preview the commands without making changes
+# delegate setup: build the CLI, install on PATH, migrate host profile, install the plugin.
+#   DRY_RUN=1 ./bin/setup.sh   # preview commands without making changes
 set -euo pipefail
 
-NAME="cursor-delegate"
-MARKETPLACE="cursor-delegate-local"
-PLUGIN="${NAME}@${MARKETPLACE}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN="${DRY_RUN:-0}"
 
-# Execute args directly (no eval): quoting is preserved and arguments are never re-parsed.
 run() {
   if [ "$DRY_RUN" = "1" ]; then
     echo "DRY_RUN: $*"
@@ -20,74 +14,49 @@ run() {
   fi
 }
 
-# 1. Need cargo to build the server.
 if ! command -v cargo >/dev/null 2>&1; then
   echo "ERROR: cargo not found on PATH. Install Rust (https://rustup.rs) first." >&2
   exit 1
 fi
 
-# 2. Warn if cursor-agent is missing (prerequisite: installed + 'cursor-agent login').
 if ! command -v cursor-agent >/dev/null 2>&1; then
-  echo "WARNING: cursor-agent not on PATH. Install it and run 'cursor-agent login' before using write tools." >&2
+  echo "WARNING: cursor-agent not on PATH. Install it and run 'cursor-agent login' before write jobs." >&2
 fi
 
-# 3. Build, then copy just the binary into bin/. The target dir lives outside the repo because
-#    `claude plugin install` snapshots the whole directory, and target/ runs to hundreds of MB.
-TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cursor-delegate/target"
+TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/delegate/target"
 run cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" --target-dir "$TARGET_DIR"
-run cp "$TARGET_DIR/release/cursor-delegate-mcp" "$REPO_ROOT/bin/cursor-delegate-mcp"
-if [ -d "$REPO_ROOT/target" ]; then
-  echo "NOTE: $REPO_ROOT/target exists and will be copied into the plugin snapshot. 'cargo clean' first to skip it."
+
+INSTALL_BIN="$HOME/.local/bin/delegate"
+run mkdir -p "$(dirname "$INSTALL_BIN")"
+run cp "$TARGET_DIR/release/delegate" "$INSTALL_BIN"
+
+case ":${PATH}:" in
+  *":$HOME/.local/bin:"*) ;;
+  *)
+    echo "WARNING: $HOME/.local/bin is not on PATH. Add it to your shell profile." >&2
+    ;;
+esac
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+OLD_PROFILE="$CONFIG_HOME/cursor-delegate/host-profile.json"
+NEW_PROFILE="$CONFIG_HOME/delegate/host-profile.json"
+if [ -f "$NEW_PROFILE" ] && [ -f "$OLD_PROFILE" ]; then
+  echo "NOTE: host profile exists at both $OLD_PROFILE and $NEW_PROFILE; leaving both untouched."
+elif [ ! -f "$NEW_PROFILE" ] && [ -f "$OLD_PROFILE" ]; then
+  echo "Migrating host profile to $NEW_PROFILE"
+  run mkdir -p "$(dirname "$NEW_PROFILE")"
+  run mv "$OLD_PROFILE" "$NEW_PROFILE"
+  run rmdir "$CONFIG_HOME/cursor-delegate" 2>/dev/null || true
 fi
 
-# 4. Scaffold a minimal host-profile ONLY if absent (never overwrite).
-#    Defaults mirror the server's built-in policy (src/index.rs): idleMs 300000,
-#    toolIdleMs 1800000.
-PROFILE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cursor-delegate"
-PROFILE="$PROFILE_DIR/host-profile.json"
-if [ ! -f "$PROFILE" ]; then
-  echo "Scaffolding minimal host profile at $PROFILE"
-  run mkdir -p "$PROFILE_DIR"
-  if [ "$DRY_RUN" != "1" ]; then
-    # Optional overrides (all keys optional): set "default" / "models" to extend or
-    # override the bundled config/models.json allow-list; the rest are host policy.
-    cat > "$PROFILE" <<'JSON'
-{
-  "requiredDeny": [],
-  "promptPreamble": "",
-  "verifyCommands": [],
-  "gate": "",
-  "deadlineMs": 60000,
-  "idleMs": 300000,
-  "toolIdleMs": 1800000
-}
-JSON
-  fi
-else
-  echo "Host profile already exists at $PROFILE (leaving untouched)."
-fi
-
-# 5. Install plugin at user scope (idempotent: marketplace add + plugin install).
 if command -v claude >/dev/null 2>&1; then
   run claude plugin marketplace add "$REPO_ROOT" --scope user
-  run claude plugin install "$PLUGIN" --scope user
-  if [ "$DRY_RUN" = "1" ]; then
-    echo "DRY_RUN: skipped install of '$PLUGIN'."
-  else
-    echo "Installed '$PLUGIN' with Claude Code (user scope)."
-  fi
-  # 6. Verify the marketplace actually registered.
-  if [ "$DRY_RUN" != "1" ]; then
-    if claude plugin marketplace list 2>/dev/null | grep -q "$MARKETPLACE"; then
-      echo "Verified: marketplace '$MARKETPLACE' is registered."
-    else
-      echo "WARNING: could not confirm marketplace '$MARKETPLACE' registration. Check 'claude plugin marketplace list'." >&2
-    fi
-  fi
+  run claude plugin install delegate@delegate --scope user
+  echo "NOTE: remove a previous cursor-delegate install with: claude plugin uninstall cursor-delegate@cursor-delegate-local && claude plugin marketplace remove cursor-delegate-local"
 else
-  echo "NOTE: 'claude' CLI not found. Install manually from $REPO_ROOT:"
-  echo "  claude plugin marketplace add ./ --scope user"
-  echo "  claude plugin install $PLUGIN --scope user"
+  echo "NOTE: 'claude' CLI not found. Install the plugin manually:"
+  echo "  claude plugin marketplace add $REPO_ROOT --scope user"
+  echo "  claude plugin install delegate@delegate --scope user"
 fi
 
 echo "Done."

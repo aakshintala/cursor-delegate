@@ -1,3 +1,3 @@
 fn main() {
-    std::process::exit(cursor_delegate_mcp::cli::main());
+    std::process::exit(delegate::cli::main());
 }

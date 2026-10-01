@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
     Ask,
-    Plan,
-    Write,
     #[serde(rename = "write-unsandboxed")]
     WriteUnsandboxed,
 }
@@ -14,8 +12,6 @@ impl Capability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ask => "ask",
-            Self::Plan => "plan",
-            Self::Write => "write",
             Self::WriteUnsandboxed => "write-unsandboxed",
         }
     }
@@ -23,45 +19,10 @@ impl Capability {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "ask" => Some(Self::Ask),
-            "plan" => Some(Self::Plan),
-            "write" => Some(Self::Write),
             "write-unsandboxed" => Some(Self::WriteUnsandboxed),
             _ => None,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum Isolation {
-    None,
-    CallerProvided {
-        path: String,
-    },
-    BackendProvided {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        base: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RunInput {
-    pub prompt: String,
-    pub model: Option<String>,
-    pub require_non_claude: Option<bool>,
-    pub capability: Option<Capability>,
-    pub allow_unsandboxed: Option<bool>,
-    pub session: Option<String>,
-    pub isolation: Option<Isolation>,
-    pub verify_commands: Option<Vec<String>>,
-    pub gate: Option<String>,
-    pub allow_partial_commit: Option<bool>,
-    pub wait_ms: Option<f64>,
-    pub idle_ms: Option<Option<f64>>,
-    pub tool_idle_ms: Option<Option<f64>>,
-    pub background: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -174,8 +135,6 @@ pub struct RunOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub downgraded: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stderr_tail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate_result: Option<GateResult>,
@@ -274,11 +233,7 @@ pub struct ResolvedModel {
 pub struct HostProfile {
     pub default: Option<String>,
     pub models: Option<std::collections::HashMap<String, ModelEntry>>,
-    pub required_deny: Option<Vec<String>>,
-    pub prompt_preamble: Option<String>,
-    pub verify_commands: Option<Vec<String>>,
     pub gate: Option<String>,
-    pub deadline_ms: Option<f64>,
     pub idle_ms: Option<Option<f64>>,
     pub tool_idle_ms: Option<Option<f64>>,
 }
@@ -343,13 +298,8 @@ pub struct DoctorReport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResumeContext {
     pub model: String,
-    pub require_non_claude: Option<bool>,
     pub capability: Capability,
-    pub allow_unsandboxed: bool,
-    pub isolation: Isolation,
-    pub verify_commands: Option<Vec<String>>,
     pub gate: String,
-    pub allow_partial_commit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -363,14 +313,9 @@ pub struct JobSpec {
     pub path: Option<String>,
     pub head_before: Option<String>,
     pub gate: String,
-    pub allow_partial_commit: bool,
-    pub wait_ms: Option<f64>,
     pub idle_ms: Option<Option<f64>>,
     pub tool_idle_ms: Option<Option<f64>>,
-    pub background: Option<bool>,
     pub price_map: PriceMap,
-    pub downgraded: bool,
-    pub worktree_name: Option<String>,
     pub resume_context: ResumeContext,
 }
 
@@ -478,44 +423,6 @@ impl PartialEq<&str> for PollResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
-pub enum DispatchResult {
-    Output(RunOutput),
-    Detached {
-        status: &'static str,
-        #[serde(rename = "jobId")]
-        job_id: String,
-        #[serde(rename = "busyPath", skip_serializing_if = "Option::is_none")]
-        busy_path: Option<String>,
-    },
-    Busy {
-        status: &'static str,
-        #[serde(rename = "jobId")]
-        job_id: String,
-        #[serde(rename = "busyPath")]
-        busy_path: String,
-    },
-}
-
-impl DispatchResult {
-    pub fn status_label(&self) -> &str {
-        match self {
-            Self::Output(o) => o.status.as_str(),
-            Self::Detached { status, .. } => status,
-            Self::Busy { status, .. } => status,
-        }
-    }
-
-    pub fn job_id(&self) -> Option<&str> {
-        match self {
-            Self::Output(o) => o.job_id.as_deref(),
-            Self::Detached { job_id, .. } => Some(job_id),
-            Self::Busy { job_id, .. } => Some(job_id),
-        }
-    }
-}
-
 pub struct FinalizeCtx {
     pub cwd: String,
     pub head_before: Option<String>,
@@ -523,17 +430,12 @@ pub struct FinalizeCtx {
     pub gate: String,
     /// Kill the gate after this many milliseconds. `None` keeps the gate's own default.
     pub gate_timeout_ms: Option<u64>,
-    pub allow_partial_commit: bool,
     pub model: String,
     pub backend: String,
     pub price_map: PriceMap,
     pub job_id: Option<String>,
-    pub downgraded: bool,
     pub run_gate:
         Option<Box<dyn Fn(&str, &str, Option<&crate::util::Abort>) -> GateResult + Send + Sync>>,
     pub signal: Option<crate::util::Abort>,
     pub git_delta: Option<Box<dyn Fn(&str, Option<&str>) -> Option<ChangeSet> + Send + Sync>>,
-    pub worktree_name: Option<String>,
-    pub resolve_worktree_path:
-        Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
 }

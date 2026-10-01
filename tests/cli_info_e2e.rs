@@ -57,7 +57,7 @@ impl Env {
             // Isolate from the developer machine's real host profile: exact
             // table assertions need the bundled models only.
             .env(
-                "CURSOR_DELEGATE_HOST_PROFILE",
+                "DELEGATE_HOST_PROFILE",
                 self.dir.join("nonexistent-profile.json"),
             )
             .stdin(Stdio::piped())
@@ -157,7 +157,7 @@ fn doctor_passes_against_full_fake() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout.contains("ok    delegate 0.5.0"), "{stdout}");
+    assert!(stdout.contains("ok    delegate 1.0.0"), "{stdout}");
     assert!(
         stdout.contains("ok    cursor: cursor-agent 2026.09.28-64d2043 ("),
         "{stdout}"

@@ -12,21 +12,8 @@ impl std::fmt::Display for ModelNotAllowedError {
 }
 impl std::error::Error for ModelNotAllowedError {}
 
-#[derive(Debug)]
-pub struct NonClaudeViolationError {
-    pub message: String,
-}
-
-impl std::fmt::Display for NonClaudeViolationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-impl std::error::Error for NonClaudeViolationError {}
-
 pub fn resolve_model(
     model: Option<&str>,
-    require_non_claude: bool,
     config: &impl ConfigLike,
 ) -> Result<ResolvedModel, Box<dyn std::error::Error + Send + Sync>> {
     let model = model
@@ -37,13 +24,6 @@ pub fn resolve_model(
             message: format!("model \"{model}\" is not in the allow-list"),
         }) as Box<dyn std::error::Error + Send + Sync>
     })?;
-    if require_non_claude && entry.backend == "claude" {
-        return Err(Box::new(NonClaudeViolationError {
-            message: format!(
-                "requireNonClaude is set but model \"{model}\" has backend \"claude\""
-            ),
-        }));
-    }
     if entry.backend != "cursor" {
         return Err(format!(
             "model \"{model}\" uses backend \"{}\", which is not implemented yet",
@@ -141,7 +121,7 @@ mod tests {
     #[test]
     fn omitted_model_resolves_to_default() {
         let (d, m) = base();
-        let r = resolve_model(None, false, &(d.as_str(), &m)).unwrap();
+        let r = resolve_model(None, &(d.as_str(), &m)).unwrap();
         assert_eq!(r.model, "composer-2.5");
         assert_eq!(r.backend, "cursor");
         assert_eq!(r.price, m["composer-2.5"].price);
@@ -150,7 +130,7 @@ mod tests {
     #[test]
     fn allowed_id_resolves_with_backend_and_price() {
         let (d, m) = base();
-        let r = resolve_model(Some("grok-4.7-high"), false, &(d.as_str(), &m)).unwrap();
+        let r = resolve_model(Some("grok-4.7-high"), &(d.as_str(), &m)).unwrap();
         assert_eq!(r.model, "grok-4.7-high");
         assert_eq!(r.backend, "cursor");
         assert_eq!(r.price, m["grok-4.7-high"].price);
@@ -159,36 +139,14 @@ mod tests {
     #[test]
     fn unknown_id_throws_model_not_allowed() {
         let (d, m) = base();
-        let e = resolve_model(Some("not-listed"), false, &(d.as_str(), &m)).unwrap_err();
+        let e = resolve_model(Some("not-listed"), &(d.as_str(), &m)).unwrap_err();
         assert!(e.downcast_ref::<ModelNotAllowedError>().is_some());
-    }
-
-    #[test]
-    fn require_non_claude_rejects_explicit_claude() {
-        let (d, m) = base();
-        let e = resolve_model(Some("claude-sonnet-5-5"), true, &(d.as_str(), &m)).unwrap_err();
-        assert!(e.downcast_ref::<NonClaudeViolationError>().is_some());
-    }
-
-    #[test]
-    fn require_non_claude_rejects_claude_default() {
-        let (_, m) = base();
-        let e = resolve_model(None, true, &("claude-sonnet-5-5", &m)).unwrap_err();
-        assert!(e.downcast_ref::<NonClaudeViolationError>().is_some());
-    }
-
-    #[test]
-    fn require_non_claude_passes_non_claude() {
-        let (d, m) = base();
-        let r = resolve_model(Some("grok-4.7-high"), true, &(d.as_str(), &m)).unwrap();
-        assert_eq!(r.model, "grok-4.7-high");
-        assert_eq!(r.backend, "cursor");
     }
 
     #[test]
     fn claude_backend_is_not_implemented() {
         let (d, m) = base();
-        let e = resolve_model(Some("claude-sonnet-5-5"), false, &(d.as_str(), &m)).unwrap_err();
+        let e = resolve_model(Some("claude-sonnet-5-5"), &(d.as_str(), &m)).unwrap_err();
         assert_eq!(
             e.to_string(),
             "model \"claude-sonnet-5-5\" uses backend \"claude\", which is not implemented yet"
@@ -198,8 +156,7 @@ mod tests {
     #[test]
     fn pi_backend_is_not_implemented() {
         let (d, m) = base();
-        let e =
-            resolve_model(Some("openai-codex/gpt-6-luna"), false, &(d.as_str(), &m)).unwrap_err();
+        let e = resolve_model(Some("openai-codex/gpt-6-luna"), &(d.as_str(), &m)).unwrap_err();
         assert_eq!(
             e.to_string(),
             "model \"openai-codex/gpt-6-luna\" uses backend \"pi\", which is not implemented yet"

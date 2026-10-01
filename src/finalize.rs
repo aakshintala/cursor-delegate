@@ -5,27 +5,12 @@ use crate::types::{ChangeSet, FinalizeCtx, GateResult, PriceMap, RunOutput, RunS
 use crate::util::Abort;
 use crate::util::tail;
 
-fn resolve_ops_cwd(ctx: &FinalizeCtx) -> Option<String> {
-    if ctx.worktree_name.is_none() {
-        return Some(ctx.cwd.clone());
-    }
-    if let Some(r) = &ctx.resolve_worktree_path {
-        return r(&ctx.cwd, ctx.worktree_name.as_deref());
-    }
-    crate::git::resolve_worktree_path(&ctx.cwd, ctx.worktree_name.as_deref())
-}
-
-fn compute_change_set(ctx: &FinalizeCtx) -> (Option<String>, Option<ChangeSet>) {
-    let ops_cwd = resolve_ops_cwd(ctx);
-    let Some(cwd) = ops_cwd.clone() else {
-        return (ops_cwd, None);
-    };
-    let cs = if let Some(g) = &ctx.git_delta {
-        g(&cwd, ctx.head_before.as_deref())
+fn compute_change_set(ctx: &FinalizeCtx) -> Option<ChangeSet> {
+    if let Some(g) = &ctx.git_delta {
+        g(&ctx.cwd, ctx.head_before.as_deref())
     } else {
-        crate::git::git_delta(&cwd, ctx.head_before.as_deref())
-    };
-    (ops_cwd, cs)
+        crate::git::git_delta(&ctx.cwd, ctx.head_before.as_deref())
+    }
 }
 
 pub fn base_output(
@@ -34,7 +19,6 @@ pub fn base_output(
     backend: &str,
     price_map: &PriceMap,
     job_id: Option<&str>,
-    downgraded: bool,
 ) -> RunOutput {
     let usage = res.raw.usage.clone();
     let mut out = to_run_output(
@@ -46,9 +30,6 @@ pub fn base_output(
     );
     if let Some(id) = job_id {
         out.job_id = Some(id.to_string());
-    }
-    if downgraded {
-        out.downgraded = Some(true);
     }
     out
 }
@@ -75,45 +56,30 @@ pub fn finalize_run(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput {
         &ctx.backend,
         &ctx.price_map,
         ctx.job_id.as_deref(),
-        ctx.downgraded,
     );
     if (!res.clean_exit || out.status == RunStatus::Error) && !res.stderr.is_empty() {
         out.stderr_tail = Some(tail(&res.stderr, 2048));
     }
     let mut concerns: Vec<String> = Vec::new();
-    let ops_cwd = resolve_ops_cwd(ctx);
     if !ctx.gate.is_empty() {
-        let cwd = ops_cwd.clone().unwrap_or_else(|| ctx.cwd.clone());
-        let gate_result = run_gate_ctx(ctx, &cwd);
+        let gate_result = run_gate_ctx(ctx, &ctx.cwd);
         if !gate_result.passed && out.status == RunStatus::Done {
             out.status = RunStatus::DoneWithConcerns;
         }
         out.gate_result = Some(gate_result);
     }
-    if let Some(cwd) = ops_cwd {
-        let change_set = if let Some(g) = &ctx.git_delta {
-            g(&cwd, ctx.head_before.as_deref())
-        } else {
-            crate::git::git_delta(&cwd, ctx.head_before.as_deref())
-        };
-        if let Some(cs) = change_set {
-            if ctx.is_write
-                && !cs.new_commits.is_empty()
-                && !cs.uncommitted_files.is_empty()
-                && !ctx.allow_partial_commit
-            {
-                concerns.push(
-                    "Commits landed but the working tree is still dirty: HEAD may not reflect a \
-complete, buildable change. Review the uncommitted files, or pass \
-allowPartialCommit to suppress this."
-                        .into(),
-                );
-                if out.status == RunStatus::Done {
-                    out.status = RunStatus::DoneWithConcerns;
-                }
+    if let Some(cs) = compute_change_set(ctx) {
+        if ctx.is_write && !cs.new_commits.is_empty() && !cs.uncommitted_files.is_empty() {
+            concerns.push(
+                "Commits landed but the working tree is still dirty: HEAD may not reflect a \
+complete, buildable change. Review the uncommitted files."
+                    .into(),
+            );
+            if out.status == RunStatus::Done {
+                out.status = RunStatus::DoneWithConcerns;
             }
-            out.change_set = Some(cs);
         }
+        out.change_set = Some(cs);
     }
     if !concerns.is_empty() {
         out.concerns = Some(concerns);
@@ -128,13 +94,11 @@ pub fn finalize_stall(res: &BackendResult, ctx: &FinalizeCtx) -> RunOutput {
         &ctx.backend,
         &ctx.price_map,
         ctx.job_id.as_deref(),
-        ctx.downgraded,
     );
     if !res.stderr.is_empty() {
         out.stderr_tail = Some(tail(&res.stderr, 2048));
     }
-    let (_, change_set) = compute_change_set(ctx);
-    if let Some(cs) = change_set {
+    if let Some(cs) = compute_change_set(ctx) {
         out.change_set = Some(cs);
     }
     out
@@ -147,17 +111,13 @@ pub fn default_finalize_ctx(cwd: &str, model: &str, backend: &str) -> FinalizeCt
         is_write: false,
         gate: String::new(),
         gate_timeout_ms: None,
-        allow_partial_commit: false,
         model: model.into(),
         backend: backend.into(),
         price_map: Default::default(),
         job_id: None,
-        downgraded: false,
         run_gate: None,
         signal: None::<Abort>,
         git_delta: None,
-        worktree_name: None,
-        resolve_worktree_path: None,
     }
 }
 
@@ -261,19 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn allow_partial_commit_suppresses() {
-        let d = dirty();
-        let mut ctx = base_ctx();
-        ctx.is_write = true;
-        ctx.allow_partial_commit = true;
-        ctx.head_before = Some("aaa".into());
-        ctx.git_delta = Some(Box::new(move |_, _| Some(d.clone())));
-        let out = finalize_run(&ok_result(), &ctx);
-        assert_eq!(out.status, RunStatus::Done);
-        assert!(out.concerns.is_none());
-    }
-
-    #[test]
     fn gate_failure_on_error_stays_error() {
         let mut ctx = base_ctx();
         ctx.gate = "make test".into();
@@ -345,13 +292,11 @@ mod tests {
     }
 
     #[test]
-    fn job_id_and_downgraded_propagate() {
+    fn job_id_propagates() {
         let mut ctx = base_ctx();
         ctx.job_id = Some("job-1".into());
-        ctx.downgraded = true;
         let out = finalize_run(&ok_result(), &ctx);
         assert_eq!(out.job_id.as_deref(), Some("job-1"));
-        assert_eq!(out.downgraded, Some(true));
     }
 
     fn stalled() -> BackendResult {
@@ -414,30 +359,10 @@ mod tests {
     }
 
     #[test]
-    fn stall_jobid_downgraded() {
+    fn stall_job_id_propagates() {
         let mut ctx = base_ctx();
         ctx.job_id = Some("job-9".into());
-        ctx.downgraded = true;
         let out = finalize_stall(&stalled(), &ctx);
         assert_eq!(out.job_id.as_deref(), Some("job-9"));
-        assert_eq!(out.downgraded, Some(true));
-    }
-
-    #[test]
-    fn stall_resolves_worktree() {
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        let seen2 = std::sync::Arc::clone(&seen);
-        let d = dirty();
-        let mut ctx = base_ctx();
-        ctx.cwd = "/repo".into();
-        ctx.worktree_name = Some("wt-side".into());
-        ctx.resolve_worktree_path = Some(Box::new(|_, _| Some("/repo/wt-side".into())));
-        ctx.git_delta = Some(Box::new(move |cwd, _| {
-            *seen2.lock().unwrap() = cwd.to_string();
-            Some(d.clone())
-        }));
-        let out = finalize_stall(&stalled(), &ctx);
-        assert_eq!(seen.lock().unwrap().as_str(), "/repo/wt-side");
-        assert!(out.change_set.is_some());
     }
 }

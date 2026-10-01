@@ -52,7 +52,6 @@ pub fn to_run_output(
         cost_estimated: true,
         duration_ms: res.raw.duration_ms,
         job_id: None,
-        downgraded: None,
         stderr_tail: None,
         gate_result: None,
         change_set: None,

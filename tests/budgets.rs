@@ -127,7 +127,7 @@ impl Env {
             .env("DELEGATE_HEARTBEAT_MS", "100");
         if args.first() == Some(&"models") || args.first() == Some(&"doctor") {
             cmd.env(
-                "CURSOR_DELEGATE_HOST_PROFILE",
+                "DELEGATE_HOST_PROFILE",
                 self.dir.join("nonexistent-profile.json"),
             );
         }

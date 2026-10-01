@@ -61,7 +61,7 @@ fn run_gate_ctx(ctx: &FinalizeCtx, cwd: &str) -> GateResult {
             &ctx.gate,
             cwd,
             crate::gate::GateOpts {
-                timeout_ms: None,
+                timeout_ms: ctx.gate_timeout_ms,
                 signal: ctx.signal.as_ref(),
             },
         )
@@ -146,6 +146,7 @@ pub fn default_finalize_ctx(cwd: &str, model: &str, backend: &str) -> FinalizeCt
         head_before: None,
         is_write: false,
         gate: String::new(),
+        gate_timeout_ms: None,
         allow_partial_commit: false,
         model: model.into(),
         backend: backend.into(),

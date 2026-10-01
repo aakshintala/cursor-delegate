@@ -511,6 +511,8 @@ pub struct FinalizeCtx {
     pub head_before: Option<String>,
     pub is_write: bool,
     pub gate: String,
+    /// Kill the gate after this many milliseconds. `None` keeps the gate's own default.
+    pub gate_timeout_ms: Option<u64>,
     pub allow_partial_commit: bool,
     pub model: String,
     pub backend: String,

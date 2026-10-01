@@ -412,6 +412,10 @@ impl JobRegistry {
             head_before: spec.head_before.clone(),
             is_write: spec.is_write,
             gate: spec.gate.clone(),
+            gate_timeout_ms: spec
+                .tool_idle_ms
+                .unwrap_or(self.deps.tool_idle_ms)
+                .map(|ms| ms.max(0.0) as u64),
             allow_partial_commit: spec.allow_partial_commit,
             model: spec.model.clone(),
             backend: spec.backend.clone(),

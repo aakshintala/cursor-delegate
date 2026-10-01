@@ -9,9 +9,34 @@ use std::time::{Duration, Instant};
 
 const FAKE_AGENT: &str = r#"#!/bin/sh
 printf '%s\n' "$@" > "$(dirname "$0")/argv.txt"
+rel="$(dirname "$0")/go"
+# Silent jobs emit nothing, so the model-idle window is what kills them.
+case "$*" in
+  *SILENT*)
+    i=0
+    while [ ! -e "$rel" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    exit 0
+    ;;
+esac
 printf '%s\n' '{"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{"args":{"command":"ls"}}}}'
 case "$*" in
-  *SLOW*) i=0; while [ ! -e "$(dirname "$0")/go" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done ;;
+  *SLOW*)
+    i=0
+    while [ ! -e "$rel" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    ;;
+esac
+case "$*" in
+  *COMMIT*)
+    printf 'x\n' >> calc.py
+    git add calc.py && git commit -q -m "Fix add"
+    ;;
+esac
+case "$*" in
+  *DIRTY*)
+    printf 'x\n' >> calc.py
+    git add calc.py && git commit -q -m "Fix add"
+    printf 'leftover\n' >> extra.py
+    ;;
 esac
 case "$*" in
   *ASKME*) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"Which db?\nSTATUS: NEEDS_CONTEXT","session_id":"s-2"}' ;;
@@ -45,12 +70,20 @@ impl Env {
     }
 
     fn delegate(&self, args: &[&str], stdin: Option<&str>) -> Output {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_delegate"))
-            .args(args)
+        self.delegate_env(args, stdin, &[])
+    }
+
+    fn delegate_env(&self, args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_delegate"));
+        cmd.args(args)
             .current_dir(&self.dir)
             .env("TMPDIR", &self.dir)
             .env("CURSOR_AGENT_BIN", self.dir.join("agent.sh"))
-            .env("DELEGATE_HEARTBEAT_MS", "100")
+            .env("DELEGATE_HEARTBEAT_MS", "100");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -66,13 +99,38 @@ impl Env {
 
     /// Starts a job and returns its id.
     fn run(&self, prompt: &str) -> String {
-        let out = self.delegate(&["run", "--model", "composer-2.5"], Some(prompt));
+        self.ok(&["run", "--model", "composer-2.5"], prompt, &[])
+    }
+
+    fn ok(&self, args: &[&str], prompt: &str, env: &[(&str, &str)]) -> String {
+        self.ok_output(&self.delegate_env(args, Some(prompt), env))
+    }
+
+    fn ok_output(&self, out: &Output) -> String {
         assert!(
             out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
+            "exit {:?}\nstderr: {}\nstdout: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
         );
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
+        String::from_utf8(out.stdout.clone())
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    fn run_write(&self, prompt: &str) -> Output {
+        self.delegate(
+            &[
+                "run",
+                "--model",
+                "composer-2.5",
+                "--capability",
+                "read-write",
+            ],
+            Some(prompt),
+        )
     }
 
     fn record(&self, id: &str) -> Value {
@@ -246,4 +304,312 @@ fn bad_run_input_exits_2() {
     );
     assert_eq!(out.status.code(), Some(2));
     assert!(!Path::new(&e.dir.join("delegate-jobs")).exists());
+    for bad in ["0", "-5"] {
+        let out = e.delegate(
+            &["run", "--model", "composer-2.5", "--tool-idle-ms", bad],
+            Some("hi"),
+        );
+        assert_eq!(out.status.code(), Some(2), "{bad}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains(&format!("invalid --tool-idle-ms {bad}")),
+            "{err}"
+        );
+    }
+}
+
+fn init_repo(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let hooks = dir.with_file_name("githooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let g = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    g(&["init", "-q"]);
+    g(&["config", "user.email", "t@t.com"]);
+    g(&["config", "user.name", "t"]);
+    g(&["config", "commit.gpgsign", "false"]);
+    g(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    std::fs::write(dir.join("calc.py"), "def add(a, b):\n    return a - b\n").unwrap();
+    g(&["add", "calc.py"]);
+    g(&["commit", "-q", "-m", "init"]);
+}
+
+fn git_head(dir: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn gate_pass_keeps_done() {
+    let e = Env::new("gate-ok");
+    let id = e.ok(
+        &["run", "--model", "composer-2.5", "--gate", "true"],
+        "ship it",
+        &[],
+    );
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "DONE");
+    assert_eq!(done["result"]["gateResult"]["passed"], true);
+    assert_eq!(done["result"]["gateResult"]["exitCode"], 0);
+    assert_eq!(done["result"]["gateResult"]["command"], "true");
+    assert_eq!(done["resume"]["gate"], "true");
+    assert!(done["resume"]["toolIdleMs"].is_null());
+}
+
+#[test]
+fn gate_fail_downgrades_and_records_output() {
+    let e = Env::new("gate-bad");
+    let id = e.ok(
+        &[
+            "run",
+            "--model",
+            "composer-2.5",
+            "--gate",
+            "echo AssertionError; exit 1",
+            "--tool-idle-ms",
+            "2500",
+        ],
+        "ship it",
+        &[],
+    );
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "DONE_WITH_CONCERNS");
+    assert_eq!(done["result"]["gateResult"]["passed"], false);
+    assert_eq!(done["result"]["gateResult"]["exitCode"], 1);
+    assert_eq!(
+        done["result"]["gateResult"]["command"],
+        "echo AssertionError; exit 1"
+    );
+    assert!(
+        done["result"]["gateResult"]["outputTail"]
+            .as_str()
+            .unwrap()
+            .contains("AssertionError"),
+        "{done}"
+    );
+    assert_eq!(done["resume"]["gate"], "echo AssertionError; exit 1");
+    assert_eq!(done["resume"]["toolIdleMs"], serde_json::json!(2500));
+}
+
+#[test]
+fn gate_killed_after_tool_idle_window() {
+    let e = Env::new("gate-timeout");
+    let id = e.ok(
+        &[
+            "run",
+            "--model",
+            "composer-2.5",
+            "--tool-idle-ms",
+            "400",
+            "--gate",
+            "sleep 30",
+        ],
+        "ship it",
+        &[],
+    );
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "DONE_WITH_CONCERNS");
+    assert_eq!(done["result"]["gateResult"]["passed"], false);
+    assert!(
+        done["result"]["gateResult"]["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("timeout"),
+        "{done}"
+    );
+}
+
+#[test]
+fn change_set_lists_the_commit() {
+    let e = Env::new("cset");
+    let repo = e.dir.join("repo");
+    init_repo(&repo);
+    let before = git_head(&repo);
+    let id = e.ok(
+        &[
+            "run",
+            "--model",
+            "composer-2.5",
+            "--capability",
+            "read-write",
+            "--cwd",
+            repo.to_str().unwrap(),
+        ],
+        "COMMIT the fix",
+        &[],
+    );
+    let done = e.wait_terminal(&id);
+    let head = git_head(&repo);
+    assert_ne!(head, before);
+    assert_eq!(done["status"], "DONE");
+    let commits = done["result"]["changeSet"]["newCommits"]
+        .as_array()
+        .unwrap();
+    assert!(
+        commits.iter().any(|c| c.as_str() == Some(head.as_str())),
+        "{commits:?} head {head}"
+    );
+    let files = done["result"]["changeSet"]["filesChanged"]
+        .as_array()
+        .unwrap();
+    assert!(files.iter().any(|f| f.as_str() == Some("calc.py")));
+    assert_eq!(done["result"]["changeSet"]["dirtyAfter"], false);
+    assert!(done["result"]["concerns"].is_null());
+}
+
+#[test]
+fn dirty_tree_after_commit_is_a_concern() {
+    let e = Env::new("dirty");
+    let repo = e.dir.join("repo");
+    init_repo(&repo);
+    let id = e.ok(
+        &[
+            "run",
+            "--model",
+            "composer-2.5",
+            "--capability",
+            "read-write",
+            "--cwd",
+            repo.to_str().unwrap(),
+        ],
+        "DIRTY the tree",
+        &[],
+    );
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "DONE_WITH_CONCERNS");
+    assert_eq!(done["result"]["changeSet"]["dirtyAfter"], true);
+    let files = done["result"]["changeSet"]["uncommittedFiles"]
+        .as_array()
+        .unwrap();
+    assert!(
+        files.iter().any(|f| f.as_str() == Some("extra.py")),
+        "{files:?}"
+    );
+    let concerns = done["result"]["concerns"].as_array().unwrap();
+    assert!(
+        concerns
+            .iter()
+            .any(|c| c.as_str().unwrap().contains("still dirty")),
+        "{concerns:?}"
+    );
+}
+
+#[test]
+fn tool_idle_stalls_a_quiet_tool_call() {
+    let e = Env::new("tool-idle");
+    let id = e.ok(
+        &["run", "--model", "composer-2.5", "--tool-idle-ms", "300"],
+        "SLOW",
+        &[],
+    );
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "STALLED");
+    let text = done["result"]["text"].as_str().unwrap();
+    assert!(text.contains("Idle watchdog killed this job"), "{text}");
+}
+
+#[test]
+fn silent_agent_stalls_and_record_says_why() {
+    let e = Env::new("stall");
+    let id = e.ok(
+        &["run", "--model", "composer-2.5"],
+        "SILENT",
+        &[("DELEGATE_IDLE_MS", "200")],
+    );
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "STALLED");
+    let text = done["result"]["text"].as_str().unwrap();
+    assert!(text.contains("Idle watchdog killed this job"), "{text}");
+}
+
+#[test]
+fn write_lock_busy_until_finish_and_read_only_is_not_busy() {
+    let e = Env::new("busy");
+    let first = e.run_write("SLOW write");
+    let id = e.ok_output(&first);
+    let pid = e.record(&id)["supervisorPid"].as_i64().unwrap();
+    let busy = e.run_write("second write");
+    assert_eq!(busy.status.code(), Some(3));
+    assert_eq!(
+        String::from_utf8(busy.stderr).unwrap(),
+        format!("BUSY {id}\n")
+    );
+    assert!(busy.stdout.is_empty());
+
+    let ro_id = e.run("read only");
+    e.wait_terminal(&ro_id);
+
+    e.release();
+    e.wait_terminal(&id);
+    until("supervisor exit", || !alive(pid));
+
+    let again = e.run_write("after finish");
+    let id2 = e.ok_output(&again);
+    e.wait_terminal(&id2);
+}
+
+#[test]
+fn write_lock_released_after_supervisor_killed() {
+    let e = Env::new("lockkill");
+    let first = e.run_write("SLOW write");
+    let id = e.ok_output(&first);
+    let pid = e.record(&id)["supervisorPid"].as_i64().unwrap();
+    let busy = e.run_write("while held");
+    assert_eq!(busy.status.code(), Some(3));
+    assert_eq!(
+        String::from_utf8(busy.stderr).unwrap(),
+        format!("BUSY {id}\n")
+    );
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    let started = Instant::now();
+    let id2 = loop {
+        let again = e.run_write("after kill");
+        if again.status.success() {
+            break String::from_utf8(again.stdout).unwrap().trim().to_string();
+        }
+        assert_eq!(
+            again.status.code(),
+            Some(3),
+            "stderr {}",
+            String::from_utf8_lossy(&again.stderr)
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "lock not released after supervisor died"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    e.release();
+    e.wait_terminal(&id2);
+}
+
+#[test]
+fn watch_reports_dead_supervisor() {
+    let e = Env::new("dead-sup");
+    let id = e.run("SLOW");
+    let pid = e.record(&id)["supervisorPid"].as_i64().unwrap();
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "ERROR");
+    assert_eq!(done["result"]["text"], "supervisor died");
+    assert_eq!(e.record(&id)["status"], "ERROR");
+    assert_eq!(e.record(&id)["result"]["text"], "supervisor died");
+    e.release();
 }

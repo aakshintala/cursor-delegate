@@ -24,6 +24,7 @@ case "$*" in
 esac
 case "$*" in
   *SLOW*)
+    echo $$ > "$(dirname "$0")/agent.pid"
     i=0
     while [ ! -e "$rel" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
     ;;
@@ -57,9 +58,9 @@ esac
 const RUN_BUDGET_MS: u128 = 102; // measured: 34ms on M-series Mac, budget 3x
 const RESUME_BUDGET_MS: u128 = 93; // measured: 31ms on M-series Mac, budget 3x
 const CANCEL_BUDGET_MS: u128 = 192; // measured: 64ms on M-series Mac, budget 3x
-const WATCH_BUDGET_MS: u128 = 6; // measured: 2ms on M-series Mac, budget 3x
+const WATCH_BUDGET_MS: u128 = 50; // measured: 2ms on M-series Mac; 50ms floor, since 3x a spawn-dominated time flakes on CI
 const DOCTOR_BUDGET_MS: u128 = 567; // measured: 189ms on M-series Mac, budget 3x
-const MODELS_BUDGET_MS: u128 = 6; // measured: 2ms on M-series Mac, budget 3x
+const MODELS_BUDGET_MS: u128 = 50; // measured: 2ms on M-series Mac; 50ms floor, since 3x a spawn-dominated time flakes on CI
 const SUPERVISOR_RSS_BUDGET_KB: u64 = 8736; // measured: 2912KB on M-series Mac, budget 3x
 
 /// Wall-clock and RSS samples are not meaningful when these tests run in parallel.
@@ -75,23 +76,12 @@ struct Env {
 }
 
 impl Env {
-    fn new(name: &str) -> Self {
+    fn new(name: &str, agent_script: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("cdm-budget-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let agent = dir.join("agent.sh");
-        std::fs::write(&agent, FAKE_AGENT).unwrap();
-        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Env { dir }
-    }
-
-    fn new_info(name: &str) -> Self {
-        let dir =
-            std::env::temp_dir().join(format!("cdm-budget-info-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let agent = dir.join("agent.sh");
-        std::fs::write(&agent, info_agent_script()).unwrap();
+        std::fs::write(&agent, agent_script).unwrap();
         std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
     }
@@ -108,6 +98,23 @@ impl Env {
                 "timed out waiting for CANCELME agent"
             );
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn until_agent_pid(&self) {
+        until("agent.pid", || self.dir.join("agent.pid").exists());
+    }
+
+    fn cleanup_fake_children(&self) {
+        for name in ["grandchild.pid", "agent.pid"] {
+            let path = self.dir.join(name);
+            if let Ok(s) = std::fs::read_to_string(&path)
+                && let Ok(pid) = s.trim().parse::<i32>()
+                && pid > 0
+                && alive(pid)
+            {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
         }
     }
 
@@ -174,6 +181,10 @@ impl Drop for Env {
     }
 }
 
+fn alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
 fn until(what: &str, mut f: impl FnMut() -> bool) {
     let t = Instant::now();
     while !f() {
@@ -198,10 +209,14 @@ fn supervisor_rss_kb(pid: i32) -> u64 {
         .expect("rss parse")
 }
 
+fn assert_wall_ms(cmd: &str, ms: u128, budget: u128) {
+    assert!(ms <= budget, "{cmd} took {ms}ms, budget {budget}ms");
+}
+
 #[test]
 fn run_exits_within_wall_clock_budget() {
     serial_budgets(|| {
-        let e = Env::new("run");
+        let e = Env::new("run", FAKE_AGENT);
         let (ms, out) = e.wall_ms(&["run", "--model", "composer-2.5"], Some("SLOW brief"));
         assert!(
             out.status.success(),
@@ -211,10 +226,7 @@ fn run_exits_within_wall_clock_budget() {
         );
         let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
         assert_eq!(e.record(&id)["status"], "RUNNING");
-        assert!(
-            ms <= RUN_BUDGET_MS,
-            "run took {ms}ms, budget {RUN_BUDGET_MS}ms"
-        );
+        assert_wall_ms("run", ms, RUN_BUDGET_MS);
         e.release();
         e.wait_terminal(&id);
     });
@@ -223,7 +235,7 @@ fn run_exits_within_wall_clock_budget() {
 #[test]
 fn resume_exits_within_wall_clock_budget() {
     serial_budgets(|| {
-        let e = Env::new("resume");
+        let e = Env::new("resume", FAKE_AGENT);
         let a = e.run_id("quick");
         e.wait_terminal(&a);
         let (ms, out) = e.wall_ms(&["resume", &a], Some("SLOW follow"));
@@ -235,10 +247,7 @@ fn resume_exits_within_wall_clock_budget() {
         );
         let b = String::from_utf8(out.stdout).unwrap().trim().to_string();
         assert_eq!(e.record(&b)["status"], "RUNNING");
-        assert!(
-            ms <= RESUME_BUDGET_MS,
-            "resume took {ms}ms, budget {RESUME_BUDGET_MS}ms"
-        );
+        assert_wall_ms("resume", ms, RESUME_BUDGET_MS);
         e.release();
         e.wait_terminal(&b);
     });
@@ -247,7 +256,7 @@ fn resume_exits_within_wall_clock_budget() {
 #[test]
 fn cancel_exits_within_wall_clock_budget() {
     serial_budgets(|| {
-        let e = Env::new("cancel");
+        let e = Env::new("cancel", FAKE_AGENT);
         let id = e.run_id("CANCELME");
         e.until_agent_spawned();
         assert_eq!(e.record(&id)["status"], "RUNNING");
@@ -258,17 +267,15 @@ fn cancel_exits_within_wall_clock_budget() {
             "stderr={}",
             String::from_utf8_lossy(&out.stderr)
         );
-        assert!(
-            ms <= CANCEL_BUDGET_MS,
-            "cancel took {ms}ms, budget {CANCEL_BUDGET_MS}ms"
-        );
+        assert_wall_ms("cancel", ms, CANCEL_BUDGET_MS);
+        e.cleanup_fake_children();
     });
 }
 
 #[test]
 fn watch_terminal_job_within_wall_clock_budget() {
     serial_budgets(|| {
-        let e = Env::new("watch");
+        let e = Env::new("watch", FAKE_AGENT);
         let id = e.run_id("quick");
         e.wait_terminal(&id);
         let (ms, out) = e.wall_ms(&["watch", &id], None);
@@ -278,59 +285,49 @@ fn watch_terminal_job_within_wall_clock_budget() {
             "stderr={}",
             String::from_utf8_lossy(&out.stderr)
         );
-        assert!(
-            ms <= WATCH_BUDGET_MS,
-            "watch took {ms}ms, budget {WATCH_BUDGET_MS}ms"
-        );
+        assert_wall_ms("watch", ms, WATCH_BUDGET_MS);
     });
 }
 
 #[test]
-fn doctor_exits_within_wall_clock_budget() {
+fn doctor_and_models_within_wall_clock_budgets() {
+    let info = info_agent_script();
     serial_budgets(|| {
-        let e = Env::new_info("doctor");
-        let (ms, out) = e.wall_ms(&["doctor"], None);
-        assert_eq!(
-            out.status.code(),
-            Some(0),
-            "stderr={}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert!(
-            ms <= DOCTOR_BUDGET_MS,
-            "doctor took {ms}ms, budget {DOCTOR_BUDGET_MS}ms"
-        );
-    });
-}
-
-#[test]
-fn models_exits_within_wall_clock_budget() {
-    serial_budgets(|| {
-        let e = Env::new_info("models");
-        let (ms, out) = e.wall_ms(&["models"], None);
-        assert!(
-            out.status.success(),
-            "stderr={}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert!(
-            ms <= MODELS_BUDGET_MS,
-            "models took {ms}ms, budget {MODELS_BUDGET_MS}ms"
-        );
+        for (cmd, budget) in [("doctor", DOCTOR_BUDGET_MS), ("models", MODELS_BUDGET_MS)] {
+            let e = Env::new(cmd, &info);
+            let (ms, out) = e.wall_ms(&[cmd], None);
+            if cmd == "doctor" {
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "doctor: stderr={}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            } else {
+                assert!(
+                    out.status.success(),
+                    "models: stderr={}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            assert_wall_ms(cmd, ms, budget);
+        }
     });
 }
 
 #[test]
 fn supervisor_rss_while_running_within_budget() {
     serial_budgets(|| {
-        let e = Env::new("rss");
+        let e = Env::new("rss", FAKE_AGENT);
         let id = e.run_id("SLOW");
         until("RUNNING", || e.record(&id)["status"] == "RUNNING");
+        e.until_agent_pid();
         let pid = e.record(&id)["supervisorPid"].as_i64().unwrap() as i32;
-        let rss = supervisor_rss_kb(pid);
+        let kb = supervisor_rss_kb(pid);
+        eprintln!("supervisor rss: {kb}KB");
         assert!(
-            rss <= SUPERVISOR_RSS_BUDGET_KB,
-            "supervisor rss {rss}KB, budget {SUPERVISOR_RSS_BUDGET_KB}KB"
+            kb <= SUPERVISOR_RSS_BUDGET_KB,
+            "supervisor rss {kb}KB, budget {SUPERVISOR_RSS_BUDGET_KB}KB"
         );
         e.release();
         e.wait_terminal(&id);

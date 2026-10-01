@@ -43,7 +43,6 @@ pub fn file_status_record_writer() -> FileStatusRecordWriter {
 pub struct CliResume {
     pub model: String,
     pub cwd: String,
-    pub capability: &'static str,
     pub session_id: Option<String>,
     pub gate: String,
     #[serde(serialize_with = "crate::util::js_num_opt")]
@@ -71,7 +70,6 @@ pub struct CliRecordWriter {
     pub job_id: String,
     pub model: String,
     pub cwd: String,
-    pub capability: &'static str,
     pub gate: String,
     pub tool_idle_ms: Option<f64>,
     pub resumed_from: Option<String>,
@@ -91,7 +89,6 @@ impl StatusRecordWriter for CliRecordWriter {
             resume: CliResume {
                 model: self.model.clone(),
                 cwd: self.cwd.clone(),
-                capability: self.capability,
                 session_id,
                 gate: self.gate.clone(),
                 tool_idle_ms: self.tool_idle_ms,

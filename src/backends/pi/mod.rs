@@ -9,7 +9,7 @@
 pub(crate) mod doctor;
 
 use super::types::{BackendResult, Event, ProgressSnapshotRaw, Spawned};
-use crate::types::{Capability, JobSpec, Usage};
+use crate::types::{JobSpec, Usage};
 use std::sync::atomic::Ordering;
 
 const NO_RESULT: &str = "no result line";
@@ -37,16 +37,9 @@ pub(crate) fn resolve_bin(r#override: Option<&str>) -> String {
         .into_owned()
 }
 
-pub(crate) fn argv(
-    model: &str,
-    _capability: Capability,
-    session: Option<&str>,
-    prompt: &str,
-) -> (Vec<String>, bool) {
-    // pi has no read-only mode, so the capability maps to no flag; `run` and
-    // `resume` reject read-only pi jobs before launch. The session id is chosen
-    // before launch: resume passes the stored id, a fresh run mints one (pi
-    // creates the session if absent, continues it if present).
+pub(crate) fn argv(model: &str, session: Option<&str>, prompt: &str) -> Vec<String> {
+    // The session id is chosen before launch: resume passes the stored id, a fresh
+    // run mints one (pi creates the session if absent, continues it if present).
     let session = session
         .map(str::to_string)
         .unwrap_or_else(crate::util::random_uuid);
@@ -61,7 +54,7 @@ pub(crate) fn argv(
         "--".into(),
         prompt.to_string(),
     ];
-    (args, true)
+    args
 }
 
 /// The `--session-id` value in an argv built by [`argv`].
@@ -301,8 +294,7 @@ mod tests {
 
     #[test]
     fn fresh_run_mints_a_session_id_and_resume_reuses_it() {
-        let (fresh, is_write) = argv("openai-codex/gpt-6-luna", Capability::Ask, None, "hi");
-        assert!(is_write);
+        let fresh = argv("openai-codex/gpt-6-luna", None, "hi");
         assert_eq!(
             &fresh[..6],
             [
@@ -324,16 +316,14 @@ mod tests {
         );
         assert_eq!(&fresh[7..], ["--", "hi"]);
         // A second fresh run mints a different id.
-        let (other, _) = argv("openai-codex/gpt-6-luna", Capability::Ask, None, "hi");
+        let other = argv("openai-codex/gpt-6-luna", None, "hi");
         assert_ne!(fresh[6], other[6]);
 
-        let (resume, resume_write) = argv(
+        let resume = argv(
             "openai-codex/gpt-6-luna",
-            Capability::WriteUnsandboxed,
             Some("afcd8926-430b-4d9a-a552-d7c6d1b900ba"),
             "go",
         );
-        assert!(resume_write);
         assert_eq!(resume[6], "afcd8926-430b-4d9a-a552-d7c6d1b900ba");
         assert_eq!(&resume[7..], ["--", "go"]);
     }

@@ -129,7 +129,7 @@ fn until(what: &str, mut f: impl FnMut() -> bool) {
 }
 
 #[test]
-fn run_watch_resume_and_plan_argv() {
+fn run_watch_resume_and_auto_argv() {
     let e = Env::new("run");
     let id = e.ok(&["run", "--model", "claude-sonnet-5-5"], "What is 17 * 23?");
     assert_eq!(id.len(), 36);
@@ -142,7 +142,7 @@ fn run_watch_resume_and_plan_argv() {
         "25dddfc3-4271-4019-9de0-6795bd6483fa"
     );
     let argv = e.argv_text();
-    assert!(argv.contains("\n--permission-mode\nplan\n"), "{argv}");
+    assert!(argv.contains("\n--permission-mode\nauto\n"), "{argv}");
     assert!(!argv.contains("--resume"), "{argv}");
 
     let next = e.ok(&["resume", &id], "and plus one?");

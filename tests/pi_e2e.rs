@@ -97,10 +97,7 @@ impl Env {
     }
 
     fn run_write(&self, prompt: &str) -> String {
-        let out = self.delegate(
-            &["run", "--model", MODEL, "--capability", "read-write"],
-            Some(prompt),
-        );
+        let out = self.delegate(&["run", "--model", MODEL], Some(prompt));
         assert!(
             out.status.success(),
             "exit {:?}\nstderr: {}\nstdout: {}",
@@ -189,35 +186,6 @@ fn pi_run_stays_running_until_released() {
 }
 
 #[test]
-fn pi_read_only_is_rejected_before_detach() {
-    let e = Env::new("ro");
-    for args in [
-        vec!["run", "--model", MODEL, "--capability", "read-only"],
-        // read-only is also the default.
-        vec!["run", "--model", MODEL],
-    ] {
-        let out = e.delegate(&args, Some("hi"));
-        assert_eq!(out.status.code(), Some(2), "{args:?}");
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            err.contains("pi cannot enforce read-only"),
-            "{args:?}: {err}"
-        );
-    }
-    // Nothing detached: no job record was written.
-    let mut records = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(e.dir.join("delegate-jobs")) {
-        for entry in rd.flatten() {
-            let p = entry.path();
-            if p.extension().and_then(|s| s.to_str()) == Some("json") {
-                records.push(p);
-            }
-        }
-    }
-    assert!(records.is_empty(), "{records:?}");
-}
-
-#[test]
 fn pi_resume_reuses_the_session_id() {
     let e = Env::new("resume");
     let a = e.run_write("first brief");
@@ -241,23 +209,6 @@ fn pi_resume_reuses_the_session_id() {
     assert_eq!(ids.len(), 2, "{argv:?}");
     assert_eq!(ids[0], ids[1]);
     assert_eq!(ids[1].as_str(), first_sid.as_str());
-}
-
-#[test]
-fn pi_resume_read_only_is_rejected() {
-    let e = Env::new("resume-ro");
-    let a = e.run_write("first brief");
-    e.wait_terminal(&a);
-    let out = e.delegate(
-        &["resume", &a, "--capability", "read-only"],
-        Some("follow up"),
-    );
-    assert_eq!(out.status.code(), Some(2));
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("pi cannot enforce read-only"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
 }
 
 #[test]

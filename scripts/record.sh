@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run one prompt through a backend's raw headless CLI and save stdout/stderr as a parser fixture.
 #
-#   scripts/record.sh BACKEND MODEL CAPABILITY NAME [CWD] [SESSION] < prompt
+#   scripts/record.sh BACKEND MODEL NAME [CWD] [SESSION] < prompt
 #
-# BACKEND: cursor | pi | claude. CAPABILITY: read-only | read-write (pi rejects read-only).
+# BACKEND: cursor | pi | claude. Every backend records with its write flags.
 # SESSION resumes that backend session; pi and claude get a fresh id when it is omitted.
 # CANCEL_AFTER=N sends the CLI SIGTERM after N seconds.
 # Writes tests/fixtures/recorded/BACKEND/NAME.{stdout,stderr,argv} by default; prints the
@@ -11,8 +11,8 @@
 # tests/fixtures/contract/BACKEND/ instead, for curated parser-contract streams.
 set -uo pipefail
 
-[ $# -ge 4 ] || { sed -n 2,9p "$0"; exit 2; }
-backend=$1 model=$2 cap=$3 name=$4 cwd=${5:-$PWD} session=${6:-}
+[ $# -ge 3 ] || { sed -n 2,9p "$0"; exit 2; }
+backend=$1 model=$2 name=$3 cwd=${4:-$PWD} session=${5:-}
 here="$(cd "$(dirname "$0")" && pwd)"
 kind=${FIXTURE_KIND:-recorded}
 case "$kind" in contract|recorded) ;; *) echo "bad fixture kind: $kind" >&2; exit 2 ;; esac
@@ -23,20 +23,15 @@ prompt="$(cat)
 
 End your final message with a single trailing line that is exactly one of: STATUS: DONE, STATUS: DONE_WITH_CONCERNS, STATUS: BLOCKED, STATUS: NEEDS_CONTEXT, or STATUS: ERROR. When you need an answer from the orchestrator before you can proceed, put your question in the message body and end with STATUS: NEEDS_CONTEXT."
 
-case "$cap" in read-only|read-write) ;; *) echo "bad capability: $cap" >&2; exit 2 ;; esac
-
 case "$backend" in
   cursor)
-    argv=(cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model "$model" --workspace "$cwd")
-    [ "$cap" = read-only ] && argv+=(--mode ask) || argv+=(--sandbox disabled)
+    argv=(cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model "$model" --workspace "$cwd" --sandbox disabled)
     [ -n "$session" ] && argv+=(--resume "$session") ;;
   pi)
-    [ "$cap" = read-only ] && { echo "pi cannot enforce read-only" >&2; exit 2; }
     session=${session:-$(uuidgen | tr A-Z a-z)}
     argv=(pi -p --mode json --model "$model" --session-id "$session") ;;
   claude)
-    [ "$cap" = read-only ] && mode=plan || mode=auto
-    argv=(claude -p --output-format stream-json --verbose --model "$model" --permission-mode "$mode")
+    argv=(claude -p --output-format stream-json --verbose --model "$model" --permission-mode auto)
     if [ -n "$session" ]; then argv+=(--resume "$session")
     else session=$(uuidgen | tr A-Z a-z); argv+=(--session-id "$session"); fi ;;
   *) echo "bad backend: $backend" >&2; exit 2 ;;

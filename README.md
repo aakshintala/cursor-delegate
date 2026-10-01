@@ -12,20 +12,20 @@ From this repo:
 
 This builds `delegate`, copies it to `~/.local/bin/delegate`, optionally migrates an old host profile, and installs the skill for Claude Code and pi.
 
-You need Rust (`cargo`), and `cursor-agent` on PATH with `cursor-agent login` before read-write jobs.
+You need Rust (`cargo`), and `cursor-agent` on PATH with `cursor-agent login` before running jobs.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `delegate run` | Start a job (prompt on stdin or `--prompt-file`); prints the job id. |
-| `delegate resume <jobId>` | Continue a finished job that has a session id; optional model/capability/gate overrides. |
+| `delegate resume <jobId>` | Continue a finished job that has a session id; optional model/gate overrides. |
 | `delegate cancel <jobId>` | Stop a running job and print its terminal record. |
 | `delegate watch <jobId>...` | Block until each job is terminal (optional `--timeout` seconds). |
 | `delegate models` | List configured model ids, labels, backends, and prices. |
 | `delegate doctor` | Check the binary, `cursor-agent`, login, and model menu drift. |
 
-Capabilities: `read-only` (ask mode) or `read-write` (sandbox disabled with force). Read-write jobs take an exclusive lock on the working directory.
+Every job runs with writes enabled. A read task says "do not edit" in its brief; the record's `changeSet` shows any write. Parallel jobs need separate cwds (one worktree per lane).
 
 ## Backends
 

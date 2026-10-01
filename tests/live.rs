@@ -11,13 +11,7 @@ fn ask_multiplies_on_real_agent() {
     std::fs::create_dir_all(&dir).unwrap();
     let bin = env!("CARGO_BIN_EXE_delegate");
     let mut run = Command::new(bin)
-        .args([
-            "run",
-            "--model",
-            "composer-2.5",
-            "--capability",
-            "read-only",
-        ])
+        .args(["run", "--model", "composer-2.5"])
         .current_dir(&dir)
         .env("TMPDIR", &dir)
         .stdin(Stdio::piped())
@@ -67,7 +61,6 @@ fn pi_live_plain_answer_records_a_fixture() {
         .args([
             "pi",
             "opencode-go/muse-spark-1.3-contributor",
-            "read-write",
             "live-plain-answer",
             &dir.to_string_lossy(),
         ])
@@ -126,13 +119,7 @@ fn ask_multiplies_on_real_claude() {
 
     let bin = env!("CARGO_BIN_EXE_delegate");
     let mut run = Command::new(bin)
-        .args([
-            "run",
-            "--model",
-            "claude-sonnet-5-5",
-            "--capability",
-            "read-only",
-        ])
+        .args(["run", "--model", "claude-sonnet-5-5"])
         .current_dir(&dir)
         .env("TMPDIR", &dir)
         .env("CLAUDE_BIN", &wrapper)

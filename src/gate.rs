@@ -83,7 +83,7 @@ pub fn run_gate(command: &str, cwd: &str, opts: GateOpts<'_>) -> GateResult {
                     termed_at = Some(Instant::now());
                     unsafe { libc::kill(-pgid, libc::SIGTERM) };
                 }
-                // A gate that traps SIGTERM would otherwise hold finalize and the path lock forever.
+                // A gate that traps SIGTERM would otherwise hold finalize forever.
                 Some(t) if t.elapsed() >= KILL_GRACE => unsafe {
                     libc::kill(-pgid, libc::SIGKILL);
                 },
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn failing_command() {
         let r = run_gate(
-            "echo boom >&2; exit 3",
+            "echo boom >&2; exit 5",
             &std::env::current_dir().unwrap().to_string_lossy(),
             GateOpts {
                 timeout_ms: None,
@@ -151,7 +151,7 @@ mod tests {
             },
         );
         assert!(!r.passed);
-        assert_eq!(r.exit_code, 3);
+        assert_eq!(r.exit_code, 5);
         assert!(r.output_tail.contains("boom"));
     }
 

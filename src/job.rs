@@ -114,7 +114,7 @@ fn describe_stall_progress(job: &JobState) -> String {
     parts.join(" ")
 }
 
-fn poll_locked(st: &Inner, job_id: &str) -> PollResult {
+fn poll_state(st: &Inner, job_id: &str) -> PollResult {
     let Some((id, job)) = &st.job else {
         return PollResult::not_found();
     };
@@ -158,7 +158,7 @@ impl JobHandle {
     }
 
     fn write_record(&self, st: &Inner, job_id: &str) {
-        let record = poll_locked(st, job_id);
+        let record = poll_state(st, job_id);
         let w = &self.deps.status_writer;
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.write(job_id, &record)));
     }
@@ -281,7 +281,6 @@ impl JobHandle {
         let ctx = FinalizeCtx {
             cwd: spec.cwd.clone(),
             head_before: spec.head_before.clone(),
-            is_write: spec.is_write,
             gate: spec.gate.clone(),
             gate_timeout_ms: spec
                 .tool_idle_ms
@@ -375,16 +374,16 @@ impl JobHandle {
 
     #[cfg(test)]
     pub(crate) fn poll(&self, job_id: &str) -> PollResult {
-        poll_locked(&self.lock(), job_id)
+        poll_state(&self.lock(), job_id)
     }
 
     pub fn cancel(&self, job_id: &str) -> PollResult {
         let mut st = self.lock();
         let Some((id, job)) = st.job.as_mut() else {
-            return poll_locked(&st, job_id);
+            return poll_state(&st, job_id);
         };
         if id != job_id || job.stage == Stage::Terminal {
-            return poll_locked(&st, job_id);
+            return poll_state(&st, job_id);
         }
         job.termination = Some(JobStatus::Cancelled);
         job.finalize_abort.store(true, Ordering::SeqCst);
@@ -396,7 +395,7 @@ impl JobHandle {
         {
             st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());
         }
-        poll_locked(&st, job_id)
+        poll_state(&st, job_id)
     }
 
     pub fn wait(&self, job_id: &str, timeout_ms: Option<f64>) -> PollResult {
@@ -407,7 +406,7 @@ impl JobHandle {
                 .filter(|(id, _)| id == job_id)
                 .is_none_or(|(_, j)| j.status != JobStatus::Running)
         });
-        poll_locked(&st, job_id)
+        poll_state(&st, job_id)
     }
 }
 

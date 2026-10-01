@@ -3,7 +3,7 @@
 pub(crate) mod doctor;
 
 use super::types::Spawned;
-use crate::types::{Capability, JobSpec};
+use crate::types::JobSpec;
 use std::process::Command;
 
 pub(crate) fn resolve_bin(r#override: Option<&str>) -> String {
@@ -29,13 +29,8 @@ pub(crate) fn resolve_bin(r#override: Option<&str>) -> String {
         .into_owned()
 }
 
-pub(crate) fn argv(
-    model: &str,
-    capability: Capability,
-    session: Option<&str>,
-    prompt: &str,
-) -> (Vec<String>, bool) {
-    let is_write = capability == Capability::WriteUnsandboxed;
+/// Argv for a run. Every job runs with writes enabled: `--permission-mode auto`.
+pub(crate) fn argv(model: &str, session: Option<&str>, prompt: &str) -> Vec<String> {
     let mut args = vec![
         "-p".into(),
         "--output-format".into(),
@@ -44,7 +39,7 @@ pub(crate) fn argv(
         "--model".into(),
         model.to_string(),
         "--permission-mode".into(),
-        if is_write { "auto" } else { "plan" }.into(),
+        "auto".into(),
     ];
     if let Some(id) = session {
         args.push("--resume".into());
@@ -55,7 +50,7 @@ pub(crate) fn argv(
     }
     args.push("--".into());
     args.push(prompt.to_string());
-    (args, is_write)
+    args
 }
 
 /// Same child driver as cursor. The id minted in [`argv`] is kept when the
@@ -83,11 +78,10 @@ mod tests {
     use crate::types::{RunStatus, Usage};
 
     #[test]
-    fn plan_is_read_only_and_auto_is_write() {
-        let (ask, ask_write) = argv("claude-sonnet-5-5", Capability::Ask, None, "hi");
-        assert!(!ask_write);
+    fn argv_always_uses_auto_mode() {
+        let fresh = argv("claude-sonnet-5-5", None, "hi");
         assert_eq!(
-            ask[..8].iter().map(String::as_str).collect::<Vec<_>>(),
+            fresh[..8].iter().map(String::as_str).collect::<Vec<_>>(),
             [
                 "-p",
                 "--output-format",
@@ -96,25 +90,19 @@ mod tests {
                 "--model",
                 "claude-sonnet-5-5",
                 "--permission-mode",
-                "plan",
+                "auto",
             ]
         );
-        assert_eq!(ask[8], "--session-id");
+        assert_eq!(fresh[8], "--session-id");
         assert!(
-            ask[9].len() == 36 && ask[9].chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
+            fresh[9].len() == 36 && fresh[9].chars().all(|c| c.is_ascii_hexdigit() || c == '-'),
             "{}",
-            ask[9]
+            fresh[9]
         );
-        assert_eq!(&ask[10..], &["--".to_string(), "hi".to_string()]);
-        assert!(!ask.iter().any(|a| a.contains("disallowedTools")));
+        assert_eq!(&fresh[10..], &["--".to_string(), "hi".to_string()]);
+        assert!(!fresh.iter().any(|a| a.contains("disallowedTools")));
 
-        let (write, is_write) = argv(
-            "claude-sonnet-5-5",
-            Capability::WriteUnsandboxed,
-            Some("sid"),
-            "go",
-        );
-        assert!(is_write);
+        let write = argv("claude-sonnet-5-5", Some("sid"), "go");
         let pair = |a, b| write.windows(2).any(|w| w[0] == a && w[1] == b);
         assert!(pair("--permission-mode", "auto"));
         assert!(pair("--resume", "sid"));

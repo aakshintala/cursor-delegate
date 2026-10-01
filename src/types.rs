@@ -1,30 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Capability {
-    Ask,
-    #[serde(rename = "write-unsandboxed")]
-    WriteUnsandboxed,
-}
-
-impl Capability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ask => "ask",
-            Self::WriteUnsandboxed => "write-unsandboxed",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "ask" => Some(Self::Ask),
-            "write-unsandboxed" => Some(Self::WriteUnsandboxed),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
@@ -273,7 +248,6 @@ pub struct DoctorReport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResumeContext {
     pub model: String,
-    pub capability: Capability,
     pub gate: String,
 }
 
@@ -284,7 +258,6 @@ pub struct JobSpec {
     pub cwd: String,
     pub model: String,
     pub backend: String,
-    pub is_write: bool,
     pub path: Option<String>,
     pub head_before: Option<String>,
     pub gate: String,
@@ -401,7 +374,6 @@ impl PartialEq<&str> for PollResult {
 pub struct FinalizeCtx {
     pub cwd: String,
     pub head_before: Option<String>,
-    pub is_write: bool,
     pub gate: String,
     /// Kill the gate after this many milliseconds. `None` keeps the gate's own default.
     pub gate_timeout_ms: Option<u64>,

@@ -123,7 +123,6 @@ impl Env {
         child.wait_with_output().unwrap()
     }
 
-    /// Starts a job and returns its id.
     fn run(&self, prompt: &str) -> String {
         self.ok(&["run", "--model", "composer-2.5"], prompt, &[])
     }
@@ -144,19 +143,6 @@ impl Env {
             .unwrap()
             .trim()
             .to_string()
-    }
-
-    fn run_write(&self, prompt: &str) -> Output {
-        self.delegate(
-            &[
-                "run",
-                "--model",
-                "composer-2.5",
-                "--capability",
-                "read-write",
-            ],
-            Some(prompt),
-        )
     }
 
     fn record(&self, id: &str) -> Value {
@@ -197,7 +183,7 @@ fn run_returns_id_while_job_runs_then_it_finishes() {
     let r = e.record(&id);
     assert_eq!(r["status"], "RUNNING");
     assert_eq!(r["resume"]["model"], "composer-2.5");
-    assert_eq!(r["resume"]["capability"], "read-only");
+    assert!(r["resume"].get("capability").is_none(), "{r}");
     assert_eq!(r["resume"]["sessionId"], Value::Null);
     let pid = r["supervisorPid"].as_i64().unwrap();
     assert!(alive(pid), "supervisor must outlive `run`");
@@ -205,7 +191,10 @@ fn run_returns_id_while_job_runs_then_it_finishes() {
 
     let done = e.wait_terminal(&id);
     let argv = e.argv();
-    assert!(argv.windows(2).any(|w| w == ["--mode", "ask"]), "{argv:?}");
+    assert!(
+        argv.windows(2).any(|w| w == ["--sandbox", "disabled"]),
+        "{argv:?}"
+    );
     assert!(argv.contains(&"--force".to_string()), "{argv:?}");
     assert_eq!(done["status"], "DONE");
     assert_eq!(done["result"]["text"], "391\nSTATUS: DONE");
@@ -242,24 +231,15 @@ fn needs_context_is_parsed() {
 }
 
 #[test]
-fn read_write_and_prompt_file() {
+fn prompt_file_and_write_argv() {
     let e = Env::new("rw");
     std::fs::write(e.dir.join("p.txt"), "from file").unwrap();
     let out = e.delegate(
-        &[
-            "run",
-            "--model",
-            "composer-2.5",
-            "--capability",
-            "read-write",
-            "--prompt-file",
-            "p.txt",
-        ],
+        &["run", "--model", "composer-2.5", "--prompt-file", "p.txt"],
         None,
     );
     assert!(out.status.success());
     let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
-    assert_eq!(e.record(&id)["resume"]["capability"], "read-write");
     e.wait_terminal(&id);
     let argv = e.argv();
     assert!(
@@ -473,8 +453,6 @@ fn change_set_lists_the_commit() {
             "run",
             "--model",
             "composer-2.5",
-            "--capability",
-            "read-write",
             "--cwd",
             repo.to_str().unwrap(),
         ],
@@ -510,8 +488,6 @@ fn dirty_tree_after_commit_is_a_concern() {
             "run",
             "--model",
             "composer-2.5",
-            "--capability",
-            "read-write",
             "--cwd",
             repo.to_str().unwrap(),
         ],
@@ -566,64 +542,44 @@ fn silent_agent_stalls_and_record_says_why() {
 }
 
 #[test]
-fn write_lock_busy_until_finish_and_read_only_is_not_busy() {
-    let e = Env::new("busy");
-    let first = e.run_write("SLOW write");
-    let id = e.ok_output(&first);
-    let pid = e.record(&id)["supervisorPid"].as_i64().unwrap();
-    let busy = e.run_write("second write");
-    assert_eq!(busy.status.code(), Some(3));
-    assert_eq!(
-        String::from_utf8(busy.stderr).unwrap(),
-        format!("BUSY {id}\n")
-    );
-    assert!(busy.stdout.is_empty());
-
-    let ro_id = e.run("read only");
-    e.wait_terminal(&ro_id);
-
+fn two_runs_in_the_same_cwd_both_reach_terminal() {
+    // No serialisation: a second run in the same directory starts while the first is RUNNING.
+    let e = Env::new("parallel");
+    let a = e.run("SLOW first");
+    let b = e.run("SLOW second");
+    assert_eq!(e.record(&a)["status"], "RUNNING");
+    assert_eq!(e.record(&b)["status"], "RUNNING");
     e.release();
-    e.wait_terminal(&id);
-    until("supervisor exit", || !alive(pid));
-
-    let again = e.run_write("after finish");
-    let id2 = e.ok_output(&again);
-    e.wait_terminal(&id2);
+    assert_eq!(e.wait_terminal(&a)["status"], "DONE");
+    assert_eq!(e.wait_terminal(&b)["status"], "DONE");
 }
 
 #[test]
-fn write_lock_released_after_supervisor_killed() {
-    let e = Env::new("lockkill");
-    let first = e.run_write("SLOW write");
-    let id = e.ok_output(&first);
-    let pid = e.record(&id)["supervisorPid"].as_i64().unwrap();
-    let busy = e.run_write("while held");
-    assert_eq!(busy.status.code(), Some(3));
-    assert_eq!(
-        String::from_utf8(busy.stderr).unwrap(),
-        format!("BUSY {id}\n")
+fn capability_flag_is_an_unknown_flag_error() {
+    let e = Env::new("capflag");
+    let out = e.delegate(
+        &[
+            "run",
+            "--model",
+            "composer-2.5",
+            "--capability",
+            "read-only",
+        ],
+        Some("hi"),
     );
-    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-    let started = Instant::now();
-    let id2 = loop {
-        let again = e.run_write("after kill");
-        if again.status.success() {
-            break String::from_utf8(again.stdout).unwrap().trim().to_string();
-        }
-        assert_eq!(
-            again.status.code(),
-            Some(3),
-            "stderr {}",
-            String::from_utf8_lossy(&again.stderr)
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "lock not released after supervisor died"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    e.release();
-    e.wait_terminal(&id2);
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown flag --capability"), "{err}");
+    assert!(out.stdout.is_empty());
+
+    let out = e.delegate(
+        &["resume", "whatever", "--capability", "read-only"],
+        Some("hi"),
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown flag --capability"), "{err}");
+    assert!(out.stdout.is_empty());
 }
 
 #[test]
@@ -680,16 +636,19 @@ fn resume_continues_session_and_links_chain() {
     // No heartbeat/progress on a terminal record.
     assert!(done.get("lastHeartbeatAt").is_none(), "{done}");
     assert!(done.get("progress").is_none(), "{done}");
-    // The fake agent saw the resume flag with the original model, cwd and capability.
+    // The fake agent saw the resume flag with the original model and cwd.
     let argv = e.argv();
     assert!(
         argv.windows(2).any(|w| w == ["--resume", "s-1"]),
         "{argv:?}"
     );
     assert!(argv.contains(&"composer-2.5".to_string()), "{argv:?}");
-    assert!(argv.windows(2).any(|w| w == ["--mode", "ask"]), "{argv:?}");
+    assert!(
+        argv.windows(2).any(|w| w == ["--sandbox", "disabled"]),
+        "{argv:?}"
+    );
     assert_eq!(done["resume"]["cwd"], first["resume"]["cwd"]);
-    assert_eq!(done["resume"]["capability"], "read-only");
+    assert!(done["resume"].get("capability").is_none(), "{done}");
     // Chain links: B points back, A points forward, nothing else on A changed.
     assert_eq!(done["resumedFrom"], a.as_str());
     let again = e.record(&a);
@@ -709,15 +668,6 @@ fn resume_overrides_replace_stored_values() {
     assert_eq!(done["resume"]["model"], "grok-4.7-high");
     assert!(
         e.argv().contains(&"grok-4.7-high".to_string()),
-        "{:?}",
-        e.argv()
-    );
-
-    let c = e.resume_ok(&a, &["--capability", "read-write"], "as writer");
-    let done = e.wait_terminal(&c);
-    assert_eq!(done["resume"]["capability"], "read-write");
-    assert!(
-        e.argv().windows(2).any(|w| w == ["--sandbox", "disabled"]),
         "{:?}",
         e.argv()
     );
@@ -766,28 +716,6 @@ fn resume_running_job_exits_2() {
     );
     e.release();
     e.wait_terminal(&slow);
-}
-
-#[test]
-fn resume_read_write_into_locked_cwd_is_busy() {
-    let e = Env::new("resume-busy");
-    let a = e.ok_output(&e.run_write("quick"));
-    e.wait_terminal(&a);
-    let blocker = e.ok_output(&e.run_write("SLOW write"));
-    assert_eq!(e.record(&blocker)["status"], "RUNNING");
-    // A was read-write, so resuming it needs the same lock a second run would take.
-    let busy = e.resume(&a, &[], Some("more"));
-    assert_eq!(busy.status.code(), Some(3));
-    assert_eq!(
-        String::from_utf8(busy.stderr).unwrap(),
-        format!("BUSY {blocker}\n")
-    );
-    assert!(busy.stdout.is_empty());
-    // Once free, the resumed job takes the lock fresh through the shared run path.
-    e.release();
-    e.wait_terminal(&blocker);
-    let b = e.resume_ok(&a, &[], "more");
-    e.wait_terminal(&b);
 }
 
 #[test]

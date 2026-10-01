@@ -10,6 +10,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 libc = "0.2"
 indexmap = { version = "2", features = ["serde"] }
 
+[[bin]]
+name = "delegate"
+path = "src/bin/delegate.rs"
+
 [profile.release]
 opt-level = "s"
 lto = true

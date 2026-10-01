@@ -20,7 +20,7 @@ pub fn doctor() -> Result<i32, String> {
     Ok(code)
 }
 
-fn status_line(status: &str, msg: &str) -> String {
+pub(crate) fn status_line(status: &str, msg: &str) -> String {
     format!("{status:<5} {msg}\n")
 }
 

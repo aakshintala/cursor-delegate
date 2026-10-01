@@ -1,6 +1,7 @@
 //! cursor-agent doctor probes: `--version`, `about`, and `models`/`--list-models`.
 
 use super::resolve_bin;
+use crate::cli_info::status_line;
 use crate::doctor::{AgentCommandResult, RunDoctorOpts, default_run_agent_command};
 use crate::types::{DoctorAccountInfo, DoctorAgentInfo, DoctorModelMenuInfo, DoctorReport};
 
@@ -139,10 +140,6 @@ pub(crate) fn lines(report: &DoctorReport) -> (String, bool) {
     (text, failed)
 }
 
-fn status_line(status: &str, msg: &str) -> String {
-    format!("{status:<5} {msg}\n")
-}
-
 pub(crate) fn parse_about(stdout: &str) -> (Option<String>, Option<String>, Option<String>) {
     let mut fields = std::collections::HashMap::new();
     for line in stdout.split('\n') {
@@ -249,21 +246,24 @@ pub(crate) fn diff_configured_models(
     missing
 }
 
+fn command_err(r: &AgentCommandResult, what: &str) -> String {
+    r.error.clone().unwrap_or_else(|| {
+        let t = r.stderr.trim();
+        if t.is_empty() {
+            format!("cursor-agent {what} failed")
+        } else {
+            t.to_string()
+        }
+    })
+}
+
 pub(crate) fn probe_agent_version(
     bin: &str,
     run_command: &dyn Fn(&str, &[String]) -> AgentCommandResult,
 ) -> (Option<String>, Option<String>) {
     let r = run_command(bin, &["--version".into()]);
     if !r.ok {
-        let err = r.error.clone().unwrap_or_else(|| {
-            let t = r.stderr.trim();
-            if t.is_empty() {
-                "cursor-agent --version failed".into()
-            } else {
-                t.to_string()
-            }
-        });
-        return (None, Some(err));
+        return (None, Some(command_err(&r, "--version")));
     }
     let version = r.stdout.trim();
     (
@@ -282,14 +282,7 @@ pub(crate) fn probe_account(
 ) -> DoctorAccountInfo {
     let r = run_command(bin, &["about".into()]);
     if !r.ok {
-        let err = r.error.clone().unwrap_or_else(|| {
-            let t = r.stderr.trim();
-            if t.is_empty() {
-                "cursor-agent about failed".into()
-            } else {
-                t.to_string()
-            }
-        });
+        let err = command_err(&r, "about");
         return DoctorAccountInfo {
             logged_in: false,
             email: None,
@@ -321,14 +314,7 @@ pub(crate) fn probe_model_menu(
         list = run_command(bin, &["--list-models".into()]);
     }
     if !list.ok {
-        let err = list.error.clone().unwrap_or_else(|| {
-            let t = list.stderr.trim();
-            if t.is_empty() {
-                "cursor-agent models/--list-models failed".into()
-            } else {
-                t.to_string()
-            }
-        });
+        let err = command_err(&list, "models/--list-models");
         return DoctorModelMenuInfo {
             configured_ids: sorted,
             account_ids: None,

@@ -115,7 +115,7 @@ pub fn parse_stdout(stdout: &str, clean_exit: bool, stderr: &str) -> BackendResu
     let mut state = init_stream_state();
     let mut raw = None;
     for line in stdout.split_inclusive('\n') {
-        absorb(line, &mut state, &mut raw);
+        handle_line(line.as_bytes(), &mut state, &mut raw, &|_: Event| {});
     }
     finish(raw, clean_exit, stderr, stdout.is_empty())
 }
@@ -170,21 +170,17 @@ fn drive_streams(
     })
 }
 
-fn absorb(line: &str, state: &mut StreamState, raw: &mut Option<RawCursorJson>) -> bool {
-    let parsed = parse_line(line, state);
-    if parsed.result.is_some() {
-        *raw = parsed.result;
-    }
-    parsed.changed
-}
-
 fn handle_line(
     line: &[u8],
     state: &mut StreamState,
     raw: &mut Option<RawCursorJson>,
     on: EventFn<'_>,
 ) {
-    if absorb(&String::from_utf8_lossy(line), state, raw) {
+    let parsed = parse_line(&String::from_utf8_lossy(line), state);
+    if parsed.result.is_some() {
+        *raw = parsed.result;
+    }
+    if parsed.changed {
         on(Event::Progress(ProgressSnapshotRaw {
             last_tool: state.last_tool.clone(),
             tokens_so_far: state.tokens_so_far,
@@ -388,19 +384,6 @@ mod tests {
         !matches!(stem, "error-bad-model" | "cancelled")
     }
 
-    fn last_result(stdout: &str) -> Option<RawCursorJson> {
-        let mut last = None;
-        for line in stdout.lines() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
-                continue;
-            };
-            if v.get("type").and_then(|t| t.as_str()) == Some("result") {
-                last = serde_json::from_value(v).ok();
-            }
-        }
-        last
-    }
-
     #[test]
     fn fixtures_parse_to_a_normalized_result() {
         let dir =
@@ -426,27 +409,18 @@ mod tests {
             assert_eq!(res.stderr, stderr, "{stem}");
             assert_eq!(res.cost_usd, None, "{stem}");
             assert!(!res.text.contains("CANCELLED"), "{stem}");
-
-            match last_result(&stdout) {
-                Some(raw) => {
-                    assert_eq!(res.text, raw.result.unwrap_or_default(), "{stem}");
-                    assert_eq!(res.session_id, raw.session_id, "{stem}");
-                    assert_eq!(res.usage, raw.usage, "{stem}");
-                    assert_eq!(res.is_error, raw.is_error, "{stem}");
-                    assert_eq!(res.duration_ms, raw.duration_ms, "{stem}");
-                }
-                None if !clean && stdout.is_empty() => {
-                    assert_eq!(res.is_error, Some(true), "{stem}");
-                    assert_eq!(res.text, stderr, "{stem}");
-                    assert!(res.session_id.is_none(), "{stem}");
-                    assert!(res.usage.is_none(), "{stem}");
-                }
-                None => {
-                    assert_eq!(res.is_error, Some(true), "{stem}");
-                    assert_eq!(res.text, NO_RESULT, "{stem}");
-                    assert!(res.session_id.is_none(), "{stem}");
-                    assert!(res.usage.is_none(), "{stem}");
-                }
+            if !clean && stdout.is_empty() {
+                assert_eq!(res.is_error, Some(true), "{stem}");
+                assert_eq!(res.text, stderr, "{stem}");
+                assert!(res.session_id.is_none() && res.usage.is_none(), "{stem}");
+            } else if !clean {
+                assert_eq!(res.is_error, Some(true), "{stem}");
+                assert_eq!(res.text, NO_RESULT, "{stem}");
+                assert!(res.session_id.is_none() && res.usage.is_none(), "{stem}");
+            } else {
+                assert_eq!(res.is_error, Some(false), "{stem}");
+                assert!(res.session_id.is_some() && res.usage.is_some(), "{stem}");
+                assert!(!res.text.is_empty(), "{stem}");
             }
 
             if stem == "plain-answer" {

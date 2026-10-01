@@ -90,7 +90,7 @@ The record is `$TMPDIR/delegate-jobs/<id>.json` (a terminal record has no `lastH
 
 `status` is `DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`, `ERROR` (from the
 agent's trailing STATUS line or the supervisor), `CANCELLED`, or `STALLED` (the idle watchdog
-killed it: rerun with a larger `--tool-idle-ms`). `text` is the agent's final message; for
+killed it: rerun, with a larger `--tool-idle-ms` if it stalled inside a tool). `text` is the agent's final message; for
 `NEEDS_CONTEXT` it is the question.
 
 - `result.gateResult`: a failing gate downgrades `DONE` to `DONE_WITH_CONCERNS`; it holds the

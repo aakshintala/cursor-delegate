@@ -19,9 +19,9 @@ case "$kind" in contract|recorded) ;; *) echo "bad fixture kind: $kind" >&2; exi
 out="$here/../tests/fixtures/$kind/$backend"
 mkdir -p "$out"
 
-prompt="$(cat)
-
-End your final message with a single trailing line that is exactly one of: STATUS: DONE, STATUS: DONE_WITH_CONCERNS, STATUS: BLOCKED, STATUS: NEEDS_CONTEXT, or STATUS: ERROR. When you need an answer from the orchestrator before you can proceed, put your question in the message body and end with STATUS: NEEDS_CONTEXT."
+prompt="$(cat)"
+prompt+=$'\n\n'
+prompt+="$(cat "$here/../src/status_instruction.txt")"
 
 case "$backend" in
   cursor)

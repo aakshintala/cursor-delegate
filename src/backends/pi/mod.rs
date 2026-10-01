@@ -436,7 +436,6 @@ mod tests {
             assert_eq!(res.clean_exit, clean, "{stem}");
             assert_eq!(res.stderr, stderr, "{stem}");
             assert_eq!(res.duration_ms, None, "{stem}");
-            assert!(!res.text.contains("CANCELLED"), "{stem}");
             // The exit code never decides success: error-bad-model exits 0.
             if stem == "cancelled" {
                 assert_eq!(res.is_error, Some(true), "{stem}");

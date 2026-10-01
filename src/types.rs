@@ -93,6 +93,12 @@ pub enum RunStatus {
     NeedsContext,
     #[serde(rename = "ERROR")]
     Error,
+    /// The registry killed the run: `cancel` or the idle watchdog. Only ever set by the
+    /// registry itself, never parsed from an agent STATUS line.
+    #[serde(rename = "CANCELLED")]
+    Cancelled,
+    #[serde(rename = "STALLED")]
+    Stalled,
 }
 
 pub const RUN_STATUSES: [&str; 5] = [
@@ -111,6 +117,8 @@ impl RunStatus {
             Self::Blocked => "BLOCKED",
             Self::NeedsContext => "NEEDS_CONTEXT",
             Self::Error => "ERROR",
+            Self::Cancelled => "CANCELLED",
+            Self::Stalled => "STALLED",
         }
     }
 
@@ -407,6 +415,8 @@ impl JobStatus {
             RunStatus::Blocked => Self::Blocked,
             RunStatus::NeedsContext => Self::NeedsContext,
             RunStatus::Error => Self::Error,
+            RunStatus::Cancelled => Self::Cancelled,
+            RunStatus::Stalled => Self::Stalled,
         }
     }
 }

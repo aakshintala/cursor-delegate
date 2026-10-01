@@ -10,6 +10,19 @@ use std::time::{Duration, Instant};
 const FAKE_AGENT: &str = r#"#!/bin/sh
 printf '%s\n' "$@" > "$(dirname "$0")/argv.txt"
 rel="$(dirname "$0")/go"
+# Stays RUNNING behind a grandchild: `sleep` inherits the agent's process group, so
+# killing only the agent would leave it behind.
+case "$*" in
+  *CANCELME*)
+    sleep 300 &
+    echo $! > "$(dirname "$0")/grandchild.pid"
+    echo $$ > "$(dirname "$0")/agent.pid"
+    i=0
+    while [ ! -e "$rel" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"late\nSTATUS: DONE","session_id":"s-9"}'
+    exit 0
+    ;;
+esac
 # Silent jobs emit nothing, so the model-idle window is what kills them.
 case "$*" in
   *SILENT*)
@@ -57,6 +70,19 @@ impl Env {
         std::fs::write(&agent, FAKE_AGENT).unwrap();
         std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
+    }
+
+    /// Waits for the CANCELME fake to write its pids; on timeout, shows the job record.
+    fn until_agent_spawned(&self, id: &str) {
+        let t = Instant::now();
+        while !(self.dir.join("agent.pid").exists() && self.dir.join("grandchild.pid").exists()) {
+            assert!(
+                t.elapsed() < Duration::from_secs(10),
+                "timed out: agent spawn; record: {}",
+                self.record(id)
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// Lets SLOW jobs finish; until then they stay RUNNING (10s cap).
@@ -612,4 +638,274 @@ fn watch_reports_dead_supervisor() {
     assert_eq!(e.record(&id)["status"], "ERROR");
     assert_eq!(e.record(&id)["result"]["text"], "supervisor died");
     e.release();
+}
+
+impl Env {
+    fn resume(&self, id: &str, extra: &[&str], prompt: Option<&str>) -> Output {
+        let mut args: Vec<&str> = vec!["resume", id];
+        args.extend(extra);
+        self.delegate(&args, prompt)
+    }
+
+    fn resume_ok(&self, id: &str, extra: &[&str], prompt: &str) -> String {
+        let out = self.resume(id, extra, Some(prompt));
+        assert!(
+            out.status.success(),
+            "exit {:?}\nstderr: {}\nstdout: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+}
+
+#[test]
+fn resume_continues_session_and_links_chain() {
+    let e = Env::new("resume");
+    let a = e.run("first brief");
+    let first = e.wait_terminal(&a);
+    assert_eq!(first["status"], "DONE");
+    assert_eq!(first["resume"]["sessionId"], "s-1");
+    let pid = first["supervisorPid"].as_i64().unwrap();
+    // The original supervisor is gone: everything resume needs is in the record.
+    until("supervisor exit", || !alive(pid));
+
+    let b = e.resume_ok(&a, &[], "follow up");
+    assert_eq!(b.len(), 36);
+    let done = e.wait_terminal(&b);
+    assert_eq!(done["status"], "DONE");
+    assert_eq!(done["result"]["jobId"], b.as_str());
+    assert_eq!(done["resume"]["sessionId"], "s-1");
+    // No heartbeat/progress on a terminal record.
+    assert!(done.get("lastHeartbeatAt").is_none(), "{done}");
+    assert!(done.get("progress").is_none(), "{done}");
+    // The fake agent saw the resume flag with the original model, cwd and capability.
+    let argv = e.argv();
+    assert!(
+        argv.windows(2).any(|w| w == ["--resume", "s-1"]),
+        "{argv:?}"
+    );
+    assert!(argv.contains(&"composer-2.5".to_string()), "{argv:?}");
+    assert!(argv.windows(2).any(|w| w == ["--mode", "ask"]), "{argv:?}");
+    assert_eq!(done["resume"]["cwd"], first["resume"]["cwd"]);
+    assert_eq!(done["resume"]["capability"], "read-only");
+    // Chain links: B points back, A points forward, nothing else on A changed.
+    assert_eq!(done["resumedFrom"], a.as_str());
+    let again = e.record(&a);
+    assert_eq!(again["supersededBy"], b.as_str());
+    assert_eq!(again["result"], first["result"]);
+    assert_eq!(again["resume"], first["resume"]);
+}
+
+#[test]
+fn resume_overrides_replace_stored_values() {
+    let e = Env::new("resume-ov");
+    let a = e.run("first");
+    e.wait_terminal(&a);
+
+    let b = e.resume_ok(&a, &["--model", "grok-4.7-high"], "again");
+    let done = e.wait_terminal(&b);
+    assert_eq!(done["resume"]["model"], "grok-4.7-high");
+    assert!(
+        e.argv().contains(&"grok-4.7-high".to_string()),
+        "{:?}",
+        e.argv()
+    );
+
+    let c = e.resume_ok(&a, &["--capability", "read-write"], "as writer");
+    let done = e.wait_terminal(&c);
+    assert_eq!(done["resume"]["capability"], "read-write");
+    assert!(
+        e.argv().windows(2).any(|w| w == ["--sandbox", "disabled"]),
+        "{:?}",
+        e.argv()
+    );
+
+    std::fs::write(e.dir.join("follow.txt"), "gated follow-up").unwrap();
+    let out = e.resume(&a, &["--gate", "true", "--prompt-file", "follow.txt"], None);
+    let d = e.ok_output(&out);
+    let done = e.wait_terminal(&d);
+    assert_eq!(done["resume"]["gate"], "true");
+    assert_eq!(done["result"]["gateResult"]["command"], "true");
+    assert_eq!(done["result"]["gateResult"]["passed"], true);
+}
+
+#[test]
+fn resume_cross_backend_and_unknown_models_exit_2() {
+    let e = Env::new("resume-xb");
+    let a = e.run("first");
+    e.wait_terminal(&a);
+    for m in ["openai-codex/gpt-6-luna", "claude-sonnet-5-5"] {
+        let out = e.resume(&a, &["--model", m], Some("again"));
+        assert_eq!(out.status.code(), Some(2), "{m}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("backend"), "{err}");
+        assert!(out.stdout.is_empty());
+    }
+    let out = e.resume(&a, &["--model", "nope-9"], Some("again"));
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("nope-9") && err.contains("composer-2.5"),
+        "{err}"
+    );
+}
+
+#[test]
+fn resume_running_job_exits_2() {
+    let e = Env::new("resume-run");
+    let slow = e.run("SLOW");
+    assert_eq!(e.record(&slow)["status"], "RUNNING");
+    let out = e.resume(&slow, &[], Some("follow"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("RUNNING"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    e.release();
+    e.wait_terminal(&slow);
+}
+
+#[test]
+fn resume_read_write_into_locked_cwd_is_busy() {
+    let e = Env::new("resume-busy");
+    let a = e.ok_output(&e.run_write("quick"));
+    e.wait_terminal(&a);
+    let blocker = e.ok_output(&e.run_write("SLOW write"));
+    assert_eq!(e.record(&blocker)["status"], "RUNNING");
+    // A was read-write, so resuming it needs the same lock a second run would take.
+    let busy = e.resume(&a, &[], Some("more"));
+    assert_eq!(busy.status.code(), Some(3));
+    assert_eq!(
+        String::from_utf8(busy.stderr).unwrap(),
+        format!("BUSY {blocker}\n")
+    );
+    assert!(busy.stdout.is_empty());
+    // Once free, the resumed job takes the lock fresh through the shared run path.
+    e.release();
+    e.wait_terminal(&blocker);
+    let b = e.resume_ok(&a, &[], "more");
+    e.wait_terminal(&b);
+}
+
+#[test]
+fn resume_unknown_no_session_and_empty_prompt_exit_2() {
+    let e = Env::new("resume-err");
+    let out = e.resume("nope", &[], Some("hi"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unknown job nope"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let a = e.run("first");
+    e.wait_terminal(&a);
+    let out = e.resume(&a, &[], Some("  \n"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("prompt is empty"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // A record with no session id (cancelled before any result) is not resumable.
+    let slow = e.run("SLOW");
+    let cancelled = e.delegate(&["cancel", &slow], None);
+    assert_eq!(cancelled.status.code(), Some(0));
+    assert_eq!(e.record(&slow)["status"], "CANCELLED");
+    let out = e.resume(&slow, &[], Some("follow"));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("session"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn read_pid(dir: &std::path::Path, name: &str) -> i64 {
+    std::fs::read_to_string(dir.join(name))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn cancel_kills_agent_and_grandchild() {
+    let e = Env::new("cancel");
+    let id = e.run("CANCELME");
+    e.until_agent_spawned(&id);
+    assert_eq!(e.record(&id)["status"], "RUNNING");
+    let agent = read_pid(&e.dir, "agent.pid");
+    let grand = read_pid(&e.dir, "grandchild.pid");
+    assert!(alive(agent) && alive(grand), "agent {agent} grand {grand}");
+
+    let out = e.delegate(&["cancel", &id], None);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let final_rec: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(final_rec["status"], "CANCELLED");
+    assert_eq!(final_rec["result"]["status"], "CANCELLED");
+    assert_eq!(final_rec["result"]["jobId"], id.as_str());
+    until("agent death", || !alive(agent) && !alive(grand));
+    assert_eq!(e.record(&id)["status"], "CANCELLED");
+}
+
+#[test]
+fn cancel_sigkill_fallback_after_stopped_supervisor() {
+    let e = Env::new("cancel-kill");
+    let id = e.run("CANCELME");
+    e.until_agent_spawned(&id);
+    assert_eq!(e.record(&id)["status"], "RUNNING");
+    let sup = e.record(&id)["supervisorPid"].as_i64().unwrap() as i32;
+    let agent = read_pid(&e.dir, "agent.pid");
+    let grand = read_pid(&e.dir, "grandchild.pid");
+    // Freeze the supervisor so SIGTERM can never be answered: `cancel` must escalate
+    // through the 5s wait, SIGKILL both groups and write CANCELLED itself.
+    unsafe { libc::kill(sup, libc::SIGSTOP) };
+    let start = Instant::now();
+    let out = e.delegate(&["cancel", &id], None);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let final_rec: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(final_rec["status"], "CANCELLED");
+    assert_eq!(final_rec["result"]["status"], "CANCELLED");
+    // The full 5s SIGTERM wait elapsed: the fast supervisor path could not have fired.
+    assert!(start.elapsed() >= Duration::from_secs(5));
+    until("agent death", || !alive(agent) && !alive(grand));
+    assert_eq!(e.record(&id)["status"], "CANCELLED");
+}
+
+#[test]
+fn cancel_on_terminal_job_prints_record_and_exits_0() {
+    let e = Env::new("cancel-noop");
+    let id = e.run("quick");
+    let done = e.wait_terminal(&id);
+    let out = e.delegate(&["cancel", &id], None);
+    assert_eq!(out.status.code(), Some(0));
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(printed, done);
+}
+
+#[test]
+fn cancel_unknown_job_exits_2() {
+    let e = Env::new("cancel-unknown");
+    let out = e.delegate(&["cancel", "nope"], None);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unknown job nope"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

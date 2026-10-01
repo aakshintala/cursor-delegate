@@ -456,11 +456,17 @@ impl JobRegistry {
             });
         let mut st = self.lock();
         let mut out = out;
-        if termination.is_some()
+        if let Some(term) = termination
             && let Some(job) = st.jobs.get(job_id)
         {
-            // No terminal `result` line to report from: describe the last known progress.
+            // No terminal `result` line to report from: describe the last known progress,
+            // and mark the result itself CANCELLED/STALLED so it matches the record status.
             out.text = describe_stall_progress(job);
+            out.status = match term {
+                JobStatus::Cancelled => RunStatus::Cancelled,
+                JobStatus::Stalled => RunStatus::Stalled,
+                _ => out.status,
+            };
         }
         self.retire(&mut st, job_id, out);
         self.cv.notify_all();

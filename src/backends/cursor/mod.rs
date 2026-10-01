@@ -5,14 +5,9 @@ pub(crate) mod doctor;
 use super::types::{BackendResult, Event, EventFn, ProgressSnapshotRaw, Spawned};
 use crate::stream::{RawCursorJson, StreamState, init_stream_state, parse_line};
 use crate::types::{Capability, JobSpec};
-use std::io::Read;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// Only a 2 KB tail of stderr is ever reported; keep a bounded window of it.
-const STDERR_KEEP: usize = 64 * 1024;
+use std::sync::atomic::Ordering;
 
 const NO_RESULT: &str = "no result line";
 
@@ -69,43 +64,38 @@ pub(crate) fn argv(
 }
 
 pub(crate) fn spawn(spec: &JobSpec) -> Spawned {
-    let spawned = Command::new(&spec.bin)
-        .args(&spec.argv)
-        .current_dir(&spec.cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Own process group, so cancel also stops the shell commands the agent started.
-        .process_group(0)
-        .spawn();
-    let mut child = match spawned {
-        Ok(c) => c,
-        Err(e) => {
-            let msg = e.to_string();
-            return Spawned {
-                kill: Box::new(|| {}),
-                drive: Box::new(move |_| finish(None, false, &msg, true)),
-            };
-        }
+    let started = match super::start_child(spec) {
+        Ok(s) => s,
+        Err(msg) => return super::spawn_failed(&msg),
     };
-    let pid = child.id() as libc::pid_t;
-    // Set once the child is reaped, so a late kill can't hit a recycled pid.
-    let reaped = Arc::new(AtomicBool::new(false));
+    let pid = started.pid;
+    let reaped = started.reaped;
     let reaped_k = Arc::clone(&reaped);
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
+    let stdout = started.stdout;
+    let stderr = started.stderr;
+    let mut child = started.child;
     Spawned {
-        kill: Box::new(move || {
-            if !reaped_k.load(Ordering::SeqCst) {
-                unsafe { libc::kill(-pid, libc::SIGTERM) };
-            }
-        }),
+        kill: super::killer(pid, reaped_k),
         drive: Box::new(move |on| {
-            drive_streams(stdout, stderr, on, move || {
-                let clean = child.wait().map(|s| s.success()).unwrap_or(false);
-                reaped.store(true, Ordering::SeqCst);
-                clean
-            })
+            let mut state = init_stream_state();
+            let mut result: Option<RawCursorJson> = None;
+            let pumped = super::pump(
+                stdout,
+                stderr,
+                on,
+                move || {
+                    let clean = child.wait().map(|s| s.success()).unwrap_or(false);
+                    reaped.store(true, Ordering::SeqCst);
+                    clean
+                },
+                |line| handle_line(line, &mut state, &mut result, on),
+            );
+            finish(
+                result,
+                pumped.clean_exit,
+                &pumped.stderr,
+                !pumped.saw_stdout,
+            )
         }),
     }
 }
@@ -118,56 +108,6 @@ pub fn parse_stdout(stdout: &str, clean_exit: bool, stderr: &str) -> BackendResu
         handle_line(line.as_bytes(), &mut state, &mut raw, &|_: Event| {});
     }
     finish(raw, clean_exit, stderr, stdout.is_empty())
-}
-
-/// Pump both pipes to EOF (stderr on a scoped thread), then `wait` for the exit status.
-fn drive_streams(
-    mut stdout: impl Read,
-    mut stderr: impl Read + Send,
-    on: EventFn<'_>,
-    wait: impl FnOnce() -> bool,
-) -> BackendResult {
-    std::thread::scope(|s| {
-        let err = s.spawn(|| {
-            let mut kept: Vec<u8> = Vec::new();
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = stderr.read(&mut buf) {
-                if n == 0 {
-                    break;
-                }
-                kept.extend_from_slice(&buf[..n]);
-                if kept.len() > STDERR_KEEP {
-                    kept.drain(..kept.len() - STDERR_KEEP);
-                }
-                on(Event::Stderr);
-            }
-            String::from_utf8_lossy(&kept).into_owned()
-        });
-
-        let mut state = init_stream_state();
-        let mut result: Option<RawCursorJson> = None;
-        let mut pending: Vec<u8> = Vec::new();
-        let mut buf = [0u8; 8192];
-        let mut saw_stdout = false;
-        while let Ok(n) = stdout.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            saw_stdout = true;
-            on(Event::Activity);
-            pending.extend_from_slice(&buf[..n]);
-            while let Some(i) = pending.iter().position(|&b| b == b'\n') {
-                let line: Vec<u8> = pending.drain(..=i).collect();
-                handle_line(&line[..i], &mut state, &mut result, on);
-            }
-        }
-        // Flush a trailing line that arrived without a terminating newline.
-        if !pending.is_empty() {
-            handle_line(&pending, &mut state, &mut result, on);
-        }
-        let stderr = err.join().unwrap_or_default();
-        finish(result, wait(), &stderr, !saw_stdout)
-    })
 }
 
 fn handle_line(
@@ -232,6 +172,26 @@ mod tests {
     use super::*;
     use crate::types::Usage;
     use std::sync::Mutex;
+
+    fn drive(stdout: &[u8], stderr: &[u8], on: EventFn<'_>, clean: bool) -> BackendResult {
+        let mut state = init_stream_state();
+        let mut result: Option<RawCursorJson> = None;
+        let pumped = crate::backends::pump(
+            stdout,
+            stderr,
+            on,
+            move || clean,
+            |line| {
+                handle_line(line, &mut state, &mut result, on);
+            },
+        );
+        finish(
+            result,
+            pumped.clean_exit,
+            &pumped.stderr,
+            !pumped.saw_stdout,
+        )
+    }
 
     #[test]
     fn ask_is_read_only_and_write_disables_the_sandbox() {
@@ -300,7 +260,7 @@ mod tests {
                 progress.lock().unwrap().push(p);
             }
         };
-        let res = drive_streams(stdout.as_bytes(), &b""[..], &on, || true);
+        let res = drive(stdout.as_bytes(), &b""[..], &on, true);
         assert!(res.clean_exit);
         assert_eq!(res.text, "all good");
         assert_eq!(res.session_id.as_deref(), Some("sid"));
@@ -311,7 +271,7 @@ mod tests {
 
     #[test]
     fn non_zero_exit_is_unclean_and_stderr_is_captured() {
-        let res = drive_streams(&b""[..], &b"trouble"[..], &|_| {}, || false);
+        let res = drive(&b""[..], &b"trouble"[..], &|_| {}, false);
         assert!(!res.clean_exit);
         assert_eq!(res.stderr, "trouble");
         assert_eq!(res.is_error, Some(true));
@@ -320,9 +280,9 @@ mod tests {
 
     #[test]
     fn stderr_keeps_only_a_bounded_tail() {
-        let big = vec![b'x'; STDERR_KEEP * 2 + 5];
-        let res = drive_streams(&b""[..], &big[..], &|_| {}, || true);
-        assert_eq!(res.stderr.len(), STDERR_KEEP);
+        let big = vec![b'x'; crate::backends::STDERR_KEEP * 2 + 5];
+        let res = drive(&b""[..], &big[..], &|_| {}, true);
+        assert_eq!(res.stderr.len(), crate::backends::STDERR_KEEP);
     }
 
     #[test]

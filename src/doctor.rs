@@ -16,6 +16,19 @@ pub struct AgentCommandResult {
 
 pub type RunAgentCommandFn = Box<dyn Fn(&str, &[String]) -> AgentCommandResult + Send + Sync>;
 
+/// The failure text for a backend probe: the spawn error, else stderr, else
+/// a generic `<bin> <what> failed`. Shared by the backend doctors.
+pub(crate) fn command_err(bin: &str, r: &AgentCommandResult, what: &str) -> String {
+    r.error.clone().unwrap_or_else(|| {
+        let t = r.stderr.trim();
+        if t.is_empty() {
+            format!("{bin} {what} failed")
+        } else {
+            t.to_string()
+        }
+    })
+}
+
 pub fn default_run_agent_command(bin: &str, args: &[String]) -> AgentCommandResult {
     let child = match Command::new(bin)
         .args(args)
@@ -98,7 +111,7 @@ pub struct RunDoctorOpts<'a> {
     pub config: &'a Config,
     pub resolve_bin: Option<&'a dyn Fn(Option<&str>) -> String>,
     pub bin_exists: Option<&'a dyn Fn(&str) -> bool>,
-    pub run_command: Option<&'a dyn Fn(&str, &[String]) -> AgentCommandResult>,
+    pub run_command: Option<&'a (dyn Fn(&str, &[String]) -> AgentCommandResult + Sync)>,
     pub read_package_version: Option<&'a dyn Fn() -> Result<String, String>>,
 }
 
@@ -145,12 +158,14 @@ pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
             note: String::new(),
             error: None,
         },
+        sections: vec![],
         warnings,
         failures,
     };
 
-    // Cursor is the only implemented backend. `from_name` None is a skip in the CLI.
-    if let Some(backend) = crate::backends::Backend::from_name("cursor") {
+    // Every implemented backend that has models in the table. `from_name`
+    // None (claude until #17) is a skip in the CLI.
+    for backend in crate::backends::Backend::implemented_in(opts.config) {
         backend.fill_doctor(&mut report, &opts);
     }
     report.ok = report.failures.is_empty();

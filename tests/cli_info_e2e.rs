@@ -29,18 +29,43 @@ esac
 const FULL_LIST: &str = "composer-2.5 grok-4.7-high grok-4.7-xhigh";
 const MISSING_XHIGH: &str = "composer-2.5 grok-4.7-high";
 
+fn pi_script(fail_model: Option<&str>) -> String {
+    let auth = match fail_model {
+        None => "exit 0".to_string(),
+        Some(m) => {
+            format!("case \"$*\" in *{m}*) echo \"no such model\" >&2; exit 1 ;; esac\nexit 0")
+        }
+    };
+    format!(
+        r#"#!/bin/sh
+case "$1" in
+  --version) echo "0.99.2" ;;
+  auth) {auth} ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+"#
+    )
+}
+
 struct Env {
     dir: PathBuf,
 }
 
 impl Env {
     fn new(name: &str, script: &str) -> Self {
+        Self::new_with_pi(name, script, &pi_script(None))
+    }
+
+    fn new_with_pi(name: &str, script: &str, pi: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("cdm-info-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let agent = dir.join("agent.sh");
         std::fs::write(&agent, script).unwrap();
         std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let pi_bin = dir.join("pi.sh");
+        std::fs::write(&pi_bin, pi).unwrap();
+        std::fs::set_permissions(&pi_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
     }
 
@@ -54,6 +79,7 @@ impl Env {
             .current_dir(&self.dir)
             .env("TMPDIR", &self.dir)
             .env("CURSOR_AGENT_BIN", bin)
+            .env("PI_BIN", self.dir.join("pi.sh"))
             // Isolate from the developer machine's real host profile: exact
             // table assertions need the bundled models only.
             .env(
@@ -163,10 +189,8 @@ fn doctor_passes_against_full_fake() {
         "{stdout}"
     );
     assert!(stdout.contains("ok    cursor: logged in"), "{stdout}");
-    assert!(
-        stdout.contains("skip  pi: backend not implemented (6 models)"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("ok    pi: pi 0.99.2 ("), "{stdout}");
+    assert!(!stdout.contains("pi: backend not implemented"), "{stdout}");
     assert!(
         stdout.contains("skip  claude: backend not implemented (3 models)"),
         "{stdout}"
@@ -207,6 +231,28 @@ fn doctor_fails_when_binary_missing() {
 }
 
 #[test]
+fn doctor_warns_on_pi_model_auth_failure() {
+    let e = Env::new_with_pi(
+        "doctor-pi-warn",
+        &agent_script(FULL_LIST),
+        &pi_script(Some("openai-codex/gpt-6-luna")),
+    );
+    let out = e.delegate(&["doctor"], None);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("warn  pi: model openai-codex/gpt-6-luna auth check failed"),
+        "{stdout}"
+    );
+    assert!(!stdout.lines().any(|l| l.starts_with("fail")), "{stdout}");
+}
+
+#[test]
 fn run_rejects_unimplemented_backend_with_exit_2() {
     let e = Env::new("run-gate", &agent_script(FULL_LIST));
     let out = e.delegate(&["run", "--model", "claude-sonnet-5-5"], Some("hi"));
@@ -215,15 +261,6 @@ fn run_rejects_unimplemented_backend_with_exit_2() {
     assert!(
         err.contains(
             r#"model "claude-sonnet-5-5" uses backend "claude", which is not implemented yet"#
-        ),
-        "{err}"
-    );
-    let out = e.delegate(&["run", "--model", "openai-codex/gpt-6-luna"], Some("hi"));
-    assert_eq!(out.status.code(), Some(2));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains(
-            r#"model "openai-codex/gpt-6-luna" uses backend "pi", which is not implemented yet"#
         ),
         "{err}"
     );

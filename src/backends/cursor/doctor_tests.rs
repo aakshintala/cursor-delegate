@@ -318,6 +318,10 @@ fn run_doctor_happy_path() {
     t.insert("--version".into(), ok_cmd("2026.06.01-abc\n"));
     t.insert("about".into(), ok_cmd(&format!("{ABOUT_FIXTURE}\n")));
     t.insert("models".into(), ok_cmd(&format!("{MODELS_FIXTURE}\n")));
+    t.insert(
+        "auth check --model openai-codex/gpt-6-luna".into(),
+        ok_cmd("authenticated\n"),
+    );
     let run = stub_run(t);
     let cfg = models_config();
     let report = run_doctor(RunDoctorOpts {
@@ -334,8 +338,9 @@ fn run_doctor_happy_path() {
     assert_eq!(report.agent.version.as_deref(), Some("2026.06.01-abc"));
     assert!(report.account.logged_in);
     assert_eq!(report.account.email.as_deref(), Some("alice@example.com"));
-    // Only cursor-backend models are checked: stale-id warns, while the pi and
-    // claude models never reach the account list.
+    // Only cursor-backend models reach the cursor account list: stale-id warns,
+    // while the claude model is never checked. The pi model gets its own
+    // `auth check` and passes, so it warns nowhere.
     assert_eq!(report.model_menu.missing_from_account, ["stale-id"]);
     assert!(!report.model_menu.prices_checkable);
     assert!(report.failures.is_empty());
@@ -346,14 +351,24 @@ fn run_doctor_happy_path() {
             .iter()
             .any(|w| w.contains("gpt-6-luna") || w.contains("sonnet"))
     );
+    let pi = report
+        .sections
+        .iter()
+        .find(|s| s.backend == "pi")
+        .expect("pi section");
+    assert!(pi.found && pi.model_failures.is_empty());
 }
 
 #[test]
-fn run_doctor_ignores_unimplemented_backends() {
+fn run_doctor_checks_pi_auth_and_ignores_claude() {
     let mut t = HashMap::new();
     t.insert("--version".into(), ok_cmd("2026.06.01-abc\n"));
     t.insert("about".into(), ok_cmd(&format!("{ABOUT_FIXTURE}\n")));
     t.insert("models".into(), ok_cmd("composer-2.5 - Composer 2.5\n"));
+    t.insert(
+        "auth check --model openai-codex/gpt-6-luna".into(),
+        ok_cmd("authenticated\n"),
+    );
     let run = stub_run(t);
     let mut cfg = models_config();
     cfg.models.remove("stale-id");
@@ -367,6 +382,9 @@ fn run_doctor_ignores_unimplemented_backends() {
     assert!(report.ok);
     assert!(report.model_menu.missing_from_account.is_empty());
     assert!(report.warnings.is_empty());
+    // pi ran its per-model auth check; claude is still unimplemented.
+    assert!(report.sections.iter().any(|s| s.backend == "pi"));
+    assert!(!report.sections.iter().any(|s| s.backend == "claude"));
 }
 
 #[test]

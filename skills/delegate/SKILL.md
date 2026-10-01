@@ -12,8 +12,9 @@ You are the **orchestrator**. Run `delegate` (no arguments) for the command synt
 `delegate models` for the live model table. Never review an agent's output with the model that
 produced it.
 
-Only `cursor` models run today. `pi` and `claude` models appear in `delegate models`, but `run`
-rejects them with "backend not implemented" (exit 2).
+Only `cursor` and `pi` models run today. `claude` models appear in `delegate models`, but `run`
+rejects them with "backend not implemented" (exit 2). A `pi` model with `--capability read-only`
+is rejected (`pi cannot enforce read-only`, exit 2): pi runs need `read-write`.
 
 ## When to delegate
 
@@ -30,9 +31,9 @@ gate is what you are buying, and a hand edit skips it.
 |---|---|
 | Bulk, default | `composer-2.5` |
 | Hard work, plan writing | `grok-4.7-high`, `grok-4.7-xhigh` |
-| Cheap bulk (pi, not yet runnable) | `opencode-go/muse-spark-1.3-contributor` |
+| Cheap bulk (pi) | `opencode-go/muse-spark-1.3-contributor` |
 | Moderate | `claude-sonnet-5-5`, `claude-opus-5-5` (claude, not yet runnable) |
-| Escalation only | `openai-codex/*` (pi, not yet runnable) |
+| Escalation only | `openai-codex/*` (pi) |
 
 ## Roles
 

@@ -12,6 +12,8 @@ pub struct BackendResult {
     pub duration_ms: Option<f64>,
     pub clean_exit: bool,
     pub stderr: String,
+    /// Claude result `permission_denials`, kept whole. Empty for cursor.
+    pub permission_denials: Vec<serde_json::Value>,
 }
 
 /// Snapshot of live progress fields carried by each `Event::Progress`.

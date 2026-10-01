@@ -99,7 +99,7 @@ pub fn doctor_text(config: &Config) -> (String, i32) {
         text += &status_line("ok", &format!("delegate {}", report.plugin.version));
     }
 
-    for backend in Backend::implemented_in(config) {
+    for backend in Backend::ALL {
         let (section, bad) = backend.doctor_lines(&report);
         text += &section;
         failed |= bad;

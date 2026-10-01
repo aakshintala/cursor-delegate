@@ -47,6 +47,8 @@ esac
     )
 }
 
+const CLAUDE_FAKE: &str = include_str!("support/claude_fake.sh");
+
 struct Env {
     dir: PathBuf,
 }
@@ -66,6 +68,9 @@ impl Env {
         let pi_bin = dir.join("pi.sh");
         std::fs::write(&pi_bin, pi).unwrap();
         std::fs::set_permissions(&pi_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let claude = dir.join("claude.sh");
+        std::fs::write(&claude, CLAUDE_FAKE).unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
     }
 
@@ -80,6 +85,7 @@ impl Env {
             .env("TMPDIR", &self.dir)
             .env("CURSOR_AGENT_BIN", bin)
             .env("PI_BIN", self.dir.join("pi.sh"))
+            .env("CLAUDE_BIN", self.dir.join("claude.sh"))
             // Isolate from the developer machine's real host profile: exact
             // table assertions need the bundled models only.
             .env(
@@ -192,9 +198,11 @@ fn doctor_passes_against_full_fake() {
     assert!(stdout.contains("ok    pi: pi 0.99.2 ("), "{stdout}");
     assert!(!stdout.contains("pi: backend not implemented"), "{stdout}");
     assert!(
-        stdout.contains("skip  claude: backend not implemented (3 models)"),
+        stdout.contains("ok    claude: claude 2.0.0-test ("),
         "{stdout}"
     );
+    assert!(stdout.contains("ok    claude: logged in"), "{stdout}");
+    assert!(!stdout.contains("skip  claude"), "{stdout}");
     assert!(!stdout.contains("warn"), "{stdout}");
     assert!(!stdout.contains("fail"), "{stdout}");
 }
@@ -250,18 +258,4 @@ fn doctor_warns_on_pi_model_auth_failure() {
         "{stdout}"
     );
     assert!(!stdout.lines().any(|l| l.starts_with("fail")), "{stdout}");
-}
-
-#[test]
-fn run_rejects_unimplemented_backend_with_exit_2() {
-    let e = Env::new("run-gate", &agent_script(FULL_LIST));
-    let out = e.delegate(&["run", "--model", "claude-sonnet-5-5"], Some("hi"));
-    assert_eq!(out.status.code(), Some(2));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains(
-            r#"model "claude-sonnet-5-5" uses backend "claude", which is not implemented yet"#
-        ),
-        "{err}"
-    );
 }

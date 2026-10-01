@@ -1,8 +1,9 @@
+pub mod claude;
 pub mod cursor;
 pub mod pi;
 pub mod types;
 
-use crate::types::{Capability, Config, JobSpec};
+use crate::types::{Capability, JobSpec};
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
@@ -14,14 +15,16 @@ use types::{BackendResult, Event, EventFn, Spawned};
 pub enum Backend {
     Cursor,
     Pi,
+    Claude,
 }
 
 impl Backend {
-    /// None for a backend that is not implemented (claude until #17).
+    /// None when `name` is not an implemented backend.
     pub fn from_name(name: &str) -> Option<Backend> {
         match name {
             "cursor" => Some(Self::Cursor),
             "pi" => Some(Self::Pi),
+            "claude" => Some(Self::Claude),
             _ => None,
         }
     }
@@ -30,23 +33,19 @@ impl Backend {
         match self {
             Self::Cursor => "cursor",
             Self::Pi => "pi",
+            Self::Claude => "claude",
         }
     }
 
-    /// Implemented backends that have models in the table, sorted by name.
-    /// Doctor iterates this instead of hard-coding one backend.
-    pub fn implemented_in(config: &Config) -> Vec<Backend> {
-        let mut names: Vec<&str> = config.models.values().map(|e| e.backend.as_str()).collect();
-        names.sort();
-        names.dedup();
-        names.into_iter().filter_map(Self::from_name).collect()
-    }
+    /// Implemented backends, in doctor order.
+    pub const ALL: [Backend; 3] = [Self::Cursor, Self::Pi, Self::Claude];
 
     /// Resolved binary path (env override, then PATH, then ~/.local/bin).
     pub fn bin(self) -> String {
         match self {
             Self::Cursor => cursor::resolve_bin(None),
             Self::Pi => pi::resolve_bin(None),
+            Self::Claude => claude::resolve_bin(None),
         }
     }
 
@@ -61,6 +60,7 @@ impl Backend {
         match self {
             Self::Cursor => cursor::argv(model, capability, session, prompt),
             Self::Pi => pi::argv(model, capability, session, prompt),
+            Self::Claude => claude::argv(model, capability, session, prompt),
         }
     }
 
@@ -69,6 +69,7 @@ impl Backend {
         match self {
             Self::Cursor => cursor::spawn(spec),
             Self::Pi => pi::spawn(spec),
+            Self::Claude => claude::spawn(spec),
         }
     }
 
@@ -80,6 +81,7 @@ impl Backend {
         match self {
             Self::Cursor => cursor::doctor::fill(report, opts),
             Self::Pi => pi::doctor::fill(report, opts),
+            Self::Claude => claude::doctor::fill(report, opts),
         }
     }
 
@@ -87,6 +89,7 @@ impl Backend {
         match self {
             Self::Cursor => cursor::doctor::lines(report),
             Self::Pi => pi::doctor::lines(report),
+            Self::Claude => claude::doctor::lines(report),
         }
     }
 }
@@ -231,6 +234,8 @@ mod tests {
         assert_eq!(Backend::Cursor.name(), "cursor");
         assert_eq!(Backend::from_name("pi"), Some(Backend::Pi));
         assert_eq!(Backend::Pi.name(), "pi");
-        assert!(Backend::from_name("claude").is_none());
+        assert_eq!(Backend::from_name("claude"), Some(Backend::Claude));
+        assert_eq!(Backend::Claude.name(), "claude");
+        assert!(Backend::from_name("nope").is_none());
     }
 }

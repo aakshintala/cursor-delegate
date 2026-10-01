@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Each field decodes on its own: one malformed field reads as absent instead of voiding the rest.
-/// Shared by the cursor parser and, later, the Claude parser (#17).
+/// Shared by the cursor and Claude parsers. `is_error` is authoritative; `subtype` is ignored.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct RawCursorJson {
     #[serde(default, deserialize_with = "crate::util::lenient")]
@@ -16,6 +16,15 @@ pub(crate) struct RawCursorJson {
     pub session_id: Option<String>,
     #[serde(default, deserialize_with = "crate::util::lenient")]
     pub usage: Option<Usage>,
+    /// Claude's `total_cost_usd`. Absent on cursor, so cursor cost stays estimated.
+    #[serde(
+        default,
+        rename = "total_cost_usd",
+        deserialize_with = "crate::util::lenient"
+    )]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub permission_denials: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -73,6 +82,45 @@ fn extract_tool(tc: &Value) -> (Option<String>, Option<String>) {
     (None, None)
 }
 
+fn output_tokens(ev: &Value) -> Option<f64> {
+    for ptr in [
+        "/usage/outputTokens",
+        "/usage/output_tokens",
+        "/message/usage/outputTokens",
+        "/message/usage/output_tokens",
+    ] {
+        if let Some(n) = ev
+            .pointer(ptr)
+            .and_then(|x| x.as_f64())
+            .filter(|n| n.is_finite())
+        {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Claude `tool_use` content: tool name, and a path from `input.file_path` or `input.path`.
+fn note_tool_use(item: &Value, state: &mut StreamState) -> bool {
+    if item.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+        return false;
+    }
+    state.phase = Some("running_tool".into());
+    if let Some(name) = item
+        .get("name")
+        .and_then(|n| n.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        state.last_tool = Some(name.to_string());
+    }
+    if let Some(p) = path_from_args(item.get("input"))
+        && !state.files_touched.contains(&p)
+    {
+        state.files_touched.push(p);
+    }
+    true
+}
+
 fn extract_assistant_text(message: Option<&Value>) -> Option<String> {
     let content = message?.get("content")?.as_array()?;
     let parts: Vec<&str> = content
@@ -113,12 +161,17 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
         }
     };
 
+    // Claude system/* (hook_started, hook_response, init, commands_changed, …) and
+    // rate_limit_event carry no progress. Skip them before the usage peek.
+    if ty == "system" || ty == "rate_limit_event" {
+        return ParsedLine {
+            changed: false,
+            result: None,
+        };
+    }
+
     let mut changed = false;
-    if let Some(n) = ev
-        .pointer("/usage/outputTokens")
-        .and_then(|x| x.as_f64())
-        .filter(|n| n.is_finite())
-    {
+    if let Some(n) = output_tokens(&ev) {
         state.tokens_so_far = state.tokens_so_far.max(n);
         changed = true;
     }
@@ -147,6 +200,14 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
                 state.last_assistant = Some(truncated);
                 state.phase = Some("responding".into());
                 changed = true;
+            }
+            // Claude puts tool calls inside the assistant message, not a tool_call event.
+            if let Some(items) = ev.pointer("/message/content").and_then(|c| c.as_array()) {
+                for item in items {
+                    if note_tool_use(item, state) {
+                        changed = true;
+                    }
+                }
             }
         }
         "thinking" => {
@@ -332,6 +393,40 @@ mod tests {
             &mut s,
         );
         assert_eq!(s.tokens_so_far, 100.0);
+    }
+
+    #[test]
+    fn claude_tool_use_sets_name_and_path() {
+        let mut s = init_stream_state();
+        parse_line(
+            &json!({
+                "type": "assistant",
+                "message": {"content": [
+                    {"type": "tool_use", "name": "Edit", "input": {"file_path": "calc.py"}}
+                ]}
+            })
+            .to_string(),
+            &mut s,
+        );
+        assert_eq!(s.last_tool.as_deref(), Some("Edit"));
+        assert_eq!(s.files_touched, ["calc.py"]);
+        assert_eq!(s.phase.as_deref(), Some("running_tool"));
+    }
+
+    #[test]
+    fn skips_system_and_rate_limit_events() {
+        let mut s = init_stream_state();
+        for line in [
+            json!({"type": "system", "subtype": "hook_started"}),
+            json!({"type": "system", "subtype": "hook_response"}),
+            json!({"type": "system", "subtype": "init"}),
+            json!({"type": "system", "subtype": "commands_changed"}),
+            json!({"type": "rate_limit_event"}),
+        ] {
+            assert!(!parse_line(&line.to_string(), &mut s).changed);
+        }
+        assert!(s.last_tool.is_none());
+        assert_eq!(s.tokens_so_far, 0.0);
     }
 
     #[test]

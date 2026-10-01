@@ -316,6 +316,7 @@ impl JobHandle {
                 gate_result: None,
                 change_set: None,
                 concerns: None,
+                permission_denials: Vec::new(),
             });
         let mut st = self.lock();
         let mut out = out;

@@ -161,11 +161,10 @@ pub fn run_doctor(opts: RunDoctorOpts<'_>) -> DoctorReport {
         sections: vec![],
         warnings,
         failures,
+        claude: None,
     };
 
-    // Every implemented backend that has models in the table. `from_name`
-    // None (claude until #17) is a skip in the CLI.
-    for backend in crate::backends::Backend::implemented_in(opts.config) {
+    for backend in crate::backends::Backend::ALL {
         backend.fill_doctor(&mut report, &opts);
     }
     report.ok = report.failures.is_empty();

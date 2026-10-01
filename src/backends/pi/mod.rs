@@ -291,6 +291,7 @@ fn finish(
         duration_ms: None,
         clean_exit,
         stderr: stderr.to_string(),
+        permission_denials: Vec::new(),
     }
 }
 
@@ -518,6 +519,7 @@ mod tests {
                         duration_ms: None,
                         clean_exit: true,
                         stderr,
+                        permission_denials: Vec::new(),
                     },
                     "{stem}"
                 ),

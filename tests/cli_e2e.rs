@@ -10,6 +10,19 @@ use std::time::{Duration, Instant};
 const FAKE_AGENT: &str = r#"#!/bin/sh
 printf '%s\n' "$@" > "$(dirname "$0")/argv.txt"
 rel="$(dirname "$0")/go"
+# Stays RUNNING behind a grandchild: `sleep` inherits the agent's process group, so
+# killing only the agent would leave it behind.
+case "$*" in
+  *CANCELME*)
+    sleep 300 &
+    echo $! > "$(dirname "$0")/grandchild.pid"
+    echo $$ > "$(dirname "$0")/agent.pid"
+    i=0
+    while [ ! -e "$rel" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"late\nSTATUS: DONE","session_id":"s-9"}'
+    exit 0
+    ;;
+esac
 # Silent jobs emit nothing, so the model-idle window is what kills them.
 case "$*" in
   *SILENT*)
@@ -57,6 +70,19 @@ impl Env {
         std::fs::write(&agent, FAKE_AGENT).unwrap();
         std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
+    }
+
+    /// Waits for the CANCELME fake to write its pids; on timeout, shows the job record.
+    fn until_agent_spawned(&self, id: &str) {
+        let t = Instant::now();
+        while !(self.dir.join("agent.pid").exists() && self.dir.join("grandchild.pid").exists()) {
+            assert!(
+                t.elapsed() < Duration::from_secs(10),
+                "timed out: agent spawn; record: {}",
+                self.record(id)
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// Lets SLOW jobs finish; until then they stay RUNNING (10s cap).
@@ -799,19 +825,6 @@ fn resume_unknown_no_session_and_empty_prompt_exit_2() {
     );
 }
 
-/// A fake that stays RUNNING behind a grandchild: `sleep` inherits the agent's process
-/// group, so killing only the agent would leave it behind.
-const CANCEL_AGENT: &str = r#"#!/bin/sh
-DUR=300
-sleep $DUR &
-echo $! > "$(dirname "$0")/grandchild.pid"
-echo $$ > "$(dirname "$0")/agent.pid"
-rel="$(dirname "$0")/go"
-i=0
-while [ ! -e "$rel" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"late\nSTATUS: DONE","session_id":"s-9"}'
-"#;
-
 fn read_pid(dir: &std::path::Path, name: &str) -> i64 {
     std::fs::read_to_string(dir.join(name))
         .unwrap()
@@ -823,11 +836,8 @@ fn read_pid(dir: &std::path::Path, name: &str) -> i64 {
 #[test]
 fn cancel_kills_agent_and_grandchild() {
     let e = Env::new("cancel");
-    std::fs::write(e.dir.join("agent.sh"), CANCEL_AGENT).unwrap();
     let id = e.run("CANCELME");
-    until("agent spawn", || {
-        e.dir.join("agent.pid").exists() && e.dir.join("grandchild.pid").exists()
-    });
+    e.until_agent_spawned(&id);
     assert_eq!(e.record(&id)["status"], "RUNNING");
     let agent = read_pid(&e.dir, "agent.pid");
     let grand = read_pid(&e.dir, "grandchild.pid");
@@ -851,11 +861,8 @@ fn cancel_kills_agent_and_grandchild() {
 #[test]
 fn cancel_sigkill_fallback_after_stopped_supervisor() {
     let e = Env::new("cancel-kill");
-    std::fs::write(e.dir.join("agent.sh"), CANCEL_AGENT).unwrap();
     let id = e.run("CANCELME");
-    until("agent spawn", || {
-        e.dir.join("agent.pid").exists() && e.dir.join("grandchild.pid").exists()
-    });
+    e.until_agent_spawned(&id);
     assert_eq!(e.record(&id)["status"], "RUNNING");
     let sup = e.record(&id)["supervisorPid"].as_i64().unwrap() as i32;
     let agent = read_pid(&e.dir, "agent.pid");

@@ -1,0 +1,1 @@
+claude -p --output-format stream-json --verbose --model claude-sonnet-5-5 --permission-mode auto --resume 1dfab1ce-6a5b-4c5a-bcd2-82d221557b95 

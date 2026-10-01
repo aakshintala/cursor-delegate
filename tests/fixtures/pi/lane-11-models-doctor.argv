@@ -1,0 +1,1 @@
+pi -p --mode json --model opencode-go/muse-spark-1.3-contributor --session-id 5dd02ef8-ae92-40e4-8105-b16c07769cb1 

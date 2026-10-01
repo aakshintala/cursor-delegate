@@ -11,8 +11,7 @@ const FAKE_AGENT: &str = r#"#!/bin/sh
 printf '%s\n' "$@" > "$(dirname "$0")/argv.txt"
 printf '%s\n' '{"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{"args":{"command":"ls"}}}}'
 case "$*" in
-  *SLOW*) sleep 1 ;;
-  *LONG*) sleep 2 ;;
+  *SLOW*) i=0; while [ ! -e "$(dirname "$0")/go" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done ;;
 esac
 case "$*" in
   *ASKME*) printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"Which db?\nSTATUS: NEEDS_CONTEXT","session_id":"s-2"}' ;;
@@ -33,6 +32,11 @@ impl Env {
         std::fs::write(&agent, FAKE_AGENT).unwrap();
         std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
         Env { dir }
+    }
+
+    /// Lets SLOW jobs finish; until then they stay RUNNING (10s cap).
+    fn release(&self) {
+        std::fs::write(self.dir.join("go"), "").unwrap();
     }
 
     fn argv(&self) -> Vec<String> {
@@ -113,6 +117,7 @@ fn run_returns_id_while_job_runs_then_it_finishes() {
     assert_eq!(r["resume"]["sessionId"], Value::Null);
     let pid = r["supervisorPid"].as_i64().unwrap();
     assert!(alive(pid), "supervisor must outlive `run`");
+    e.release();
 
     let done = e.wait_terminal(&id);
     let argv = e.argv();
@@ -139,6 +144,7 @@ fn running_record_heartbeat_advances() {
         "DONE",
         "heartbeat must advance while RUNNING"
     );
+    e.release();
     e.wait_terminal(&id);
 }
 
@@ -182,7 +188,7 @@ fn read_write_and_prompt_file() {
 #[test]
 fn watch_prints_all_in_order_and_times_out_with_exit_1() {
     let e = Env::new("watch");
-    let slow = e.run("LONG");
+    let slow = e.run("SLOW");
     let fast = e.run("quick");
     let out = e.delegate(&["watch", &slow, &fast, "--timeout", "1"], None);
     assert_eq!(out.status.code(), Some(1));
@@ -194,6 +200,7 @@ fn watch_prints_all_in_order_and_times_out_with_exit_1() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["status"], "RUNNING");
 
+    e.release();
     let out = e.delegate(&["watch", &fast, &slow, "--timeout", "10"], None);
     assert_eq!(out.status.code(), Some(0));
     let lines: Vec<Value> = String::from_utf8(out.stdout)

@@ -2,7 +2,6 @@
 //! The kernel drops it when that process exits, so a crash needs no cleanup.
 
 use std::fs::OpenOptions;
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
@@ -30,20 +29,19 @@ fn cwd_key(cwd: &str) -> String {
         .unwrap_or_else(|_| cwd.to_string())
 }
 
-fn lock_path(cwd: &str) -> PathBuf {
-    let mut hasher = std::hash::DefaultHasher::new();
-    cwd_key(cwd).hash(&mut hasher);
-    std::env::temp_dir()
-        .join("delegate-locks")
-        .join(format!("{:016x}.lock", hasher.finish()))
+/// FNV-1a 64-bit. Fixed so the lock filename does not change between builds.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for b in bytes {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
-fn would_block(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::WouldBlock
-        || matches!(
-            err.raw_os_error(),
-            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-        )
+fn lock_path(cwd: &str) -> PathBuf {
+    let name = format!("{:016x}.lock", fnv1a64(cwd_key(cwd).as_bytes()));
+    std::env::temp_dir().join("delegate-locks").join(name)
 }
 
 /// `flock(LOCK_EX|LOCK_NB)`. On success the file contains `job_id` and `FD_CLOEXEC` is clear
@@ -66,11 +64,14 @@ pub fn try_acquire(cwd: &str, job_id: &str) -> Result<WriteLock, AcquireError> {
     let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        if would_block(&err) {
-            let mut holder = String::new();
-            let _ = file.take(256).read_to_string(&mut holder);
+        if err.kind() == std::io::ErrorKind::WouldBlock
+            || matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+            )
+        {
             return Err(AcquireError::Busy {
-                holder: holder.trim().to_string(),
+                holder: read_holder(&mut file),
             });
         }
         return Err(AcquireError::Io(err));
@@ -82,6 +83,24 @@ pub fn try_acquire(cwd: &str, job_id: &str) -> Result<WriteLock, AcquireError> {
         .map_err(AcquireError::Io)?;
     clear_cloexec(fd).map_err(AcquireError::Io)?;
     Ok(WriteLock { file })
+}
+
+/// The holder writes the job id after winning the flock, so a loser can observe an empty
+/// file. Retry briefly before giving up.
+fn read_holder(file: &mut std::fs::File) -> String {
+    let mut buf = [0u8; 256];
+    for _ in 0..20 {
+        if file.seek(std::io::SeekFrom::Start(0)).is_err() {
+            break;
+        }
+        let n = file.read(&mut buf).unwrap_or(0);
+        let holder = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+        if !holder.is_empty() {
+            return holder;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    String::new()
 }
 
 fn clear_cloexec(fd: i32) -> std::io::Result<()> {

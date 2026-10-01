@@ -106,7 +106,7 @@ fn run(args: &[String]) -> Result<i32, Usage> {
     let tool_idle_ms = match flag(&kv, "--tool-idle-ms") {
         None => None,
         Some(s) => match s.parse::<f64>() {
-            Ok(n) if n.is_finite() && n >= 0.0 => Some(n),
+            Ok(n) if n.is_finite() && n > 0.0 => Some(n),
             _ => return usage(format!("invalid --tool-idle-ms {s}")),
         },
     };
@@ -265,8 +265,8 @@ fn supervise(args: &[String]) -> i32 {
     let tool_idle_ms = match flag(&kv, "--tool-idle-ms") {
         None => None,
         Some(s) => match s.parse::<f64>() {
-            Ok(n) => Some(n),
-            Err(_) => return 2,
+            Ok(n) if n.is_finite() && n > 0.0 => Some(n),
+            _ => return 2,
         },
     };
     let (cap, cap_label) = match capability(cap_name) {
@@ -333,6 +333,7 @@ fn supervise(args: &[String]) -> i32 {
     {
         rd.heartbeat_ms = ms;
     }
+    // `DELEGATE_IDLE_MS`: test-only override of the model-idle window.
     if let Some(ms) = std::env::var("DELEGATE_IDLE_MS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -415,6 +416,8 @@ fn process_missing(pid: i32) -> bool {
 /// A RUNNING record whose supervisor has died is terminal: rewrite it once and let the
 /// caller print the ERROR record. Re-read after the liveness check so a supervisor that
 /// finished and exited in between is not overwritten.
+///
+/// ponytail: pid-only liveness. A reused pid hides a dead supervisor; add a heartbeat-age check if that shows up.
 fn settle_dead_supervisor(id: &str) {
     let Some(v) = read_record(id).and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
     else {

@@ -99,13 +99,38 @@ impl Env {
 
     /// Starts a job and returns its id.
     fn run(&self, prompt: &str) -> String {
-        let out = self.delegate(&["run", "--model", "composer-2.5"], Some(prompt));
+        self.ok(&["run", "--model", "composer-2.5"], prompt, &[])
+    }
+
+    fn ok(&self, args: &[&str], prompt: &str, env: &[(&str, &str)]) -> String {
+        self.ok_output(&self.delegate_env(args, Some(prompt), env))
+    }
+
+    fn ok_output(&self, out: &Output) -> String {
         assert!(
             out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
+            "exit {:?}\nstderr: {}\nstdout: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
         );
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
+        String::from_utf8(out.stdout.clone())
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    fn run_write(&self, prompt: &str) -> Output {
+        self.delegate(
+            &[
+                "run",
+                "--model",
+                "composer-2.5",
+                "--capability",
+                "read-write",
+            ],
+            Some(prompt),
+        )
     }
 
     fn record(&self, id: &str) -> Value {
@@ -279,37 +304,18 @@ fn bad_run_input_exits_2() {
     );
     assert_eq!(out.status.code(), Some(2));
     assert!(!Path::new(&e.dir.join("delegate-jobs")).exists());
-}
-
-fn stdout_id(out: &Output) -> String {
-    String::from_utf8(out.stdout.clone())
-        .unwrap()
-        .trim()
-        .to_string()
-}
-
-fn assert_ok(out: &Output) -> String {
-    assert!(
-        out.status.success(),
-        "exit {:?}\nstderr: {}\nstdout: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr),
-        String::from_utf8_lossy(&out.stdout)
-    );
-    stdout_id(out)
-}
-
-fn run_write(e: &Env, prompt: &str) -> Output {
-    e.delegate(
-        &[
-            "run",
-            "--model",
-            "composer-2.5",
-            "--capability",
-            "read-write",
-        ],
-        Some(prompt),
-    )
+    for bad in ["0", "-5"] {
+        let out = e.delegate(
+            &["run", "--model", "composer-2.5", "--tool-idle-ms", bad],
+            Some("hi"),
+        );
+        assert_eq!(out.status.code(), Some(2), "{bad}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains(&format!("invalid --tool-idle-ms {bad}")),
+            "{err}"
+        );
+    }
 }
 
 fn init_repo(dir: &Path) {
@@ -353,11 +359,11 @@ fn git_head(dir: &Path) -> String {
 #[test]
 fn gate_pass_keeps_done() {
     let e = Env::new("gate-ok");
-    let out = e.delegate(
+    let id = e.ok(
         &["run", "--model", "composer-2.5", "--gate", "true"],
-        Some("ship it"),
+        "ship it",
+        &[],
     );
-    let id = assert_ok(&out);
     let done = e.wait_terminal(&id);
     assert_eq!(done["status"], "DONE");
     assert_eq!(done["result"]["gateResult"]["passed"], true);
@@ -370,7 +376,7 @@ fn gate_pass_keeps_done() {
 #[test]
 fn gate_fail_downgrades_and_records_output() {
     let e = Env::new("gate-bad");
-    let out = e.delegate(
+    let id = e.ok(
         &[
             "run",
             "--model",
@@ -380,9 +386,9 @@ fn gate_fail_downgrades_and_records_output() {
             "--tool-idle-ms",
             "2500",
         ],
-        Some("ship it"),
+        "ship it",
+        &[],
     );
-    let id = assert_ok(&out);
     let done = e.wait_terminal(&id);
     assert_eq!(done["status"], "DONE_WITH_CONCERNS");
     assert_eq!(done["result"]["gateResult"]["passed"], false);
@@ -405,7 +411,7 @@ fn gate_fail_downgrades_and_records_output() {
 #[test]
 fn gate_killed_after_tool_idle_window() {
     let e = Env::new("gate-timeout");
-    let out = e.delegate(
+    let id = e.ok(
         &[
             "run",
             "--model",
@@ -415,9 +421,9 @@ fn gate_killed_after_tool_idle_window() {
             "--gate",
             "sleep 30",
         ],
-        Some("ship it"),
+        "ship it",
+        &[],
     );
-    let id = assert_ok(&out);
     let done = e.wait_terminal(&id);
     assert_eq!(done["status"], "DONE_WITH_CONCERNS");
     assert_eq!(done["result"]["gateResult"]["passed"], false);
@@ -436,7 +442,7 @@ fn change_set_lists_the_commit() {
     let repo = e.dir.join("repo");
     init_repo(&repo);
     let before = git_head(&repo);
-    let out = e.delegate(
+    let id = e.ok(
         &[
             "run",
             "--model",
@@ -446,9 +452,9 @@ fn change_set_lists_the_commit() {
             "--cwd",
             repo.to_str().unwrap(),
         ],
-        Some("COMMIT the fix"),
+        "COMMIT the fix",
+        &[],
     );
-    let id = assert_ok(&out);
     let done = e.wait_terminal(&id);
     let head = git_head(&repo);
     assert_ne!(head, before);
@@ -473,7 +479,7 @@ fn dirty_tree_after_commit_is_a_concern() {
     let e = Env::new("dirty");
     let repo = e.dir.join("repo");
     init_repo(&repo);
-    let out = e.delegate(
+    let id = e.ok(
         &[
             "run",
             "--model",
@@ -483,9 +489,9 @@ fn dirty_tree_after_commit_is_a_concern() {
             "--cwd",
             repo.to_str().unwrap(),
         ],
-        Some("DIRTY the tree"),
+        "DIRTY the tree",
+        &[],
     );
-    let id = assert_ok(&out);
     let done = e.wait_terminal(&id);
     assert_eq!(done["status"], "DONE_WITH_CONCERNS");
     assert_eq!(done["result"]["changeSet"]["dirtyAfter"], true);
@@ -506,14 +512,27 @@ fn dirty_tree_after_commit_is_a_concern() {
 }
 
 #[test]
+fn tool_idle_stalls_a_quiet_tool_call() {
+    let e = Env::new("tool-idle");
+    let id = e.ok(
+        &["run", "--model", "composer-2.5", "--tool-idle-ms", "300"],
+        "SLOW",
+        &[],
+    );
+    let done = e.wait_terminal(&id);
+    assert_eq!(done["status"], "STALLED");
+    let text = done["result"]["text"].as_str().unwrap();
+    assert!(text.contains("Idle watchdog killed this job"), "{text}");
+}
+
+#[test]
 fn silent_agent_stalls_and_record_says_why() {
     let e = Env::new("stall");
-    let out = e.delegate_env(
+    let id = e.ok(
         &["run", "--model", "composer-2.5"],
-        Some("SILENT"),
+        "SILENT",
         &[("DELEGATE_IDLE_MS", "200")],
     );
-    let id = assert_ok(&out);
     let done = e.wait_terminal(&id);
     assert_eq!(done["status"], "STALLED");
     let text = done["result"]["text"].as_str().unwrap();
@@ -523,10 +542,10 @@ fn silent_agent_stalls_and_record_says_why() {
 #[test]
 fn write_lock_busy_until_finish_and_read_only_is_not_busy() {
     let e = Env::new("busy");
-    let first = run_write(&e, "SLOW write");
-    let id = assert_ok(&first);
+    let first = e.run_write("SLOW write");
+    let id = e.ok_output(&first);
     let pid = e.record(&id)["supervisorPid"].as_i64().unwrap();
-    let busy = run_write(&e, "second write");
+    let busy = e.run_write("second write");
     assert_eq!(busy.status.code(), Some(3));
     assert_eq!(
         String::from_utf8(busy.stderr).unwrap(),
@@ -534,26 +553,25 @@ fn write_lock_busy_until_finish_and_read_only_is_not_busy() {
     );
     assert!(busy.stdout.is_empty());
 
-    let ro = e.delegate(&["run", "--model", "composer-2.5"], Some("read only"));
-    let ro_id = assert_ok(&ro);
+    let ro_id = e.run("read only");
     e.wait_terminal(&ro_id);
 
     e.release();
     e.wait_terminal(&id);
     until("supervisor exit", || !alive(pid));
 
-    let again = run_write(&e, "after finish");
-    let id2 = assert_ok(&again);
+    let again = e.run_write("after finish");
+    let id2 = e.ok_output(&again);
     e.wait_terminal(&id2);
 }
 
 #[test]
 fn write_lock_released_after_supervisor_killed() {
     let e = Env::new("lockkill");
-    let first = run_write(&e, "SLOW write");
-    let id = assert_ok(&first);
+    let first = e.run_write("SLOW write");
+    let id = e.ok_output(&first);
     let pid = e.record(&id)["supervisorPid"].as_i64().unwrap();
-    let busy = run_write(&e, "while held");
+    let busy = e.run_write("while held");
     assert_eq!(busy.status.code(), Some(3));
     assert_eq!(
         String::from_utf8(busy.stderr).unwrap(),
@@ -562,9 +580,9 @@ fn write_lock_released_after_supervisor_killed() {
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     let started = Instant::now();
     let id2 = loop {
-        let again = run_write(&e, "after kill");
+        let again = e.run_write("after kill");
         if again.status.success() {
-            break stdout_id(&again);
+            break String::from_utf8(again.stdout).unwrap().trim().to_string();
         }
         assert_eq!(
             again.status.code(),

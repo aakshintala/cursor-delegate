@@ -1,4 +1,4 @@
-use crate::types::{JobStatus, PollResult, RunOutput, RunStatus};
+use crate::types::PollResult;
 use crate::util::{json_compact, random_uuid};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -117,45 +117,28 @@ impl StatusRecordWriter for CliRecordWriter {
 /// A RUNNING record whose supervisor is gone. Keeps resume so a later command can still
 /// see what the job was; the result text is the whole reason.
 pub fn write_supervisor_died(job_id: &str, prior: &serde_json::Value) -> std::io::Result<()> {
-    let resume_in = &prior["resume"];
-    let capability = if resume_in["capability"] == "read-write" {
-        "read-write"
-    } else {
-        "read-only"
+    let mut rec = prior.clone();
+    let Some(obj) = rec.as_object_mut() else {
+        return Err(std::io::Error::other("status record is not an object"));
     };
-    let session_id = resume_in["sessionId"].as_str().map(str::to_string);
-    let model = resume_in["model"].as_str().unwrap_or("").to_string();
-    let rec = CliRecord {
-        poll: PollResult::Terminal {
-            status: JobStatus::Error,
-            result: RunOutput {
-                status: RunStatus::Error,
-                text: "supervisor died".into(),
-                session_id: session_id.clone(),
-                backend: "cursor".into(),
-                model: model.clone(),
-                usage: None,
-                cost_usd: None,
-                cost_estimated: false,
-                duration_ms: None,
-                job_id: Some(job_id.to_string()),
-                downgraded: None,
-                stderr_tail: None,
-                gate_result: None,
-                change_set: None,
-                concerns: None,
-            },
-            superseded_by: None,
-        },
-        supervisor_pid: prior["supervisorPid"].as_u64().unwrap_or(0) as u32,
-        resume: CliResume {
-            model,
-            cwd: resume_in["cwd"].as_str().unwrap_or("").to_string(),
-            capability,
-            session_id,
-            gate: resume_in["gate"].as_str().unwrap_or("").to_string(),
-            tool_idle_ms: resume_in["toolIdleMs"].as_f64(),
-        },
-    };
+    obj.insert("status".into(), "ERROR".into());
+    obj.remove("lastHeartbeatAt");
+    obj.remove("progress");
+    let resume = &prior["resume"];
+    obj.insert(
+        "result".into(),
+        serde_json::json!({
+            "status": "ERROR",
+            "text": "supervisor died",
+            "sessionId": resume["sessionId"].clone(),
+            "backend": "cursor",
+            "model": resume["model"].as_str().unwrap_or(""),
+            "usage": null,
+            "costUsd": null,
+            "costEstimated": false,
+            "durationMs": null,
+            "jobId": job_id,
+        }),
+    );
     write_atomic(&cli_record_path(job_id), &json_compact(&rec))
 }

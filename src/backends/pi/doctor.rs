@@ -15,7 +15,8 @@ pub(crate) fn fill(report: &mut DoctorReport, opts: &RunDoctorOpts<'_>) {
         Some(f) => f(p),
         None => std::path::Path::new(p).exists(),
     };
-    let run_command = |bin: &str, args: &[String]| match opts.run_command {
+    let injected = opts.run_command;
+    let run_command = move |bin: &str, args: &[String]| match injected {
         Some(f) => f(bin, args),
         None => crate::doctor::default_run_agent_command(bin, args),
     };
@@ -45,17 +46,29 @@ pub(crate) fn fill(report: &mut DoctorReport, opts: &RunDoctorOpts<'_>) {
     if let Some(e) = &ver_err {
         report.failures.push(format!("pi --version failed: {e}"));
     }
-    let mut model_failures = Vec::new();
-    for id in &configured_ids {
-        let r = run_command(
-            &path,
-            &["auth".into(), "check".into(), "--model".into(), id.clone()],
-        );
-        if !r.ok {
-            let err = command_err("pi", &r, &format!("auth check --model {id}"));
-            model_failures.push(format!("model {id} auth check failed: {err}"));
-        }
-    }
+    // Each check is a ~130ms pi start-up; run them together, keep the sorted order.
+    let model_failures: Vec<String> = std::thread::scope(|s| {
+        let checks: Vec<_> = configured_ids
+            .iter()
+            .map(|id| {
+                let (path, run_command) = (&path, &run_command);
+                s.spawn(move || {
+                    let r = run_command(
+                        path,
+                        &["auth".into(), "check".into(), "--model".into(), id.clone()],
+                    );
+                    (!r.ok).then(|| {
+                        let err = command_err("pi", &r, &format!("auth check --model {id}"));
+                        format!("model {id} auth check failed: {err}")
+                    })
+                })
+            })
+            .collect();
+        checks
+            .into_iter()
+            .filter_map(|h| h.join().unwrap())
+            .collect()
+    });
     report.sections.push(DoctorBackendSection {
         backend: "pi".into(),
         found: true,

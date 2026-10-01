@@ -313,6 +313,8 @@ fn doctor_and_models_within_wall_clock_budgets() {
     serial_budgets(|| {
         for (cmd, budget) in [("doctor", DOCTOR_BUDGET_MS), ("models", MODELS_BUDGET_MS)] {
             let e = Env::new(cmd, &info);
+            // macOS scans each freshly written fake script on its first exec; time a warm run.
+            let _ = e.delegate(&[cmd], None);
             let (ms, out) = e.wall_ms(&[cmd], None);
             if cmd == "doctor" {
                 assert_eq!(

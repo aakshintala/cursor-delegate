@@ -111,7 +111,7 @@ pub struct RunDoctorOpts<'a> {
     pub config: &'a Config,
     pub resolve_bin: Option<&'a dyn Fn(Option<&str>) -> String>,
     pub bin_exists: Option<&'a dyn Fn(&str) -> bool>,
-    pub run_command: Option<&'a dyn Fn(&str, &[String]) -> AgentCommandResult>,
+    pub run_command: Option<&'a (dyn Fn(&str, &[String]) -> AgentCommandResult + Sync)>,
     pub read_package_version: Option<&'a dyn Fn() -> Result<String, String>>,
 }
 

@@ -1,0 +1,1 @@
+cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model composer-2.5 --workspace /private/tmp/claude-501/-Users-user-work-delegate/b6c92b35-d0b3-4033-aeb8-cccd1ebc9f27/scratchpad/w-cursor --mode ask --resume 54b96753-cec4-4820-ade9-aa49ebbb463a 

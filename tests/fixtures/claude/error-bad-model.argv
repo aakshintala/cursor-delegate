@@ -1,0 +1,1 @@
+claude -p --output-format stream-json --verbose --model no-such-model --permission-mode plan --session-id fce15918-f021-401a-b0bc-27dfd05cff07 

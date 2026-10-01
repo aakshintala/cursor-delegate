@@ -1,5 +1,6 @@
 //! Human-readable `delegate models` and `delegate doctor` output.
 
+use crate::backends::Backend;
 use crate::config::build_deps;
 use crate::doctor::{RunDoctorOpts, run_doctor};
 use crate::types::Config;
@@ -19,7 +20,7 @@ pub fn doctor() -> Result<i32, String> {
     Ok(code)
 }
 
-fn status_line(status: &str, msg: &str) -> String {
+pub(crate) fn status_line(status: &str, msg: &str) -> String {
     format!("{status:<5} {msg}\n")
 }
 
@@ -98,50 +99,16 @@ pub fn doctor_text(config: &Config) -> (String, i32) {
         text += &status_line("ok", &format!("delegate {}", report.plugin.version));
     }
 
-    if !report.agent.found {
-        text += &status_line("fail", "cursor: cursor-agent not found");
-        failed = true;
-    } else {
-        let path = report.agent.path.as_deref().unwrap_or("?");
-        match report.agent.version.as_deref() {
-            Some(v) => {
-                text += &status_line("ok", &format!("cursor: cursor-agent {v} ({path})"));
-            }
-            None => {
-                let e = report.agent.error.as_deref().unwrap_or("unknown error");
-                text += &status_line(
-                    "fail",
-                    &format!("cursor: cursor-agent --version failed: {e}"),
-                );
-                failed = true;
-            }
-        }
-        if report.account.logged_in {
-            text += &status_line("ok", "cursor: logged in");
-        } else {
-            let e = report
-                .account
-                .error
-                .as_deref()
-                .unwrap_or("no email in about output");
-            text += &status_line("fail", &format!("cursor: not logged in: {e}"));
-            failed = true;
-        }
-        if let Some(e) = report.model_menu.error.as_deref() {
-            text += &status_line("warn", &format!("cursor: model list check failed: {e}"));
-        }
-        for id in &report.model_menu.missing_from_account {
-            text += &status_line(
-                "warn",
-                &format!("cursor: model {id} missing from cursor-agent --list-models"),
-            );
-        }
+    if let Some(backend) = Backend::from_name("cursor") {
+        let (section, bad) = backend.doctor_lines(&report);
+        text += &section;
+        failed |= bad;
     }
 
     // One skip line per backend that is not implemented yet, with its model count.
     let mut skips: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for entry in config.models.values() {
-        if entry.backend != "cursor" {
+        if Backend::from_name(&entry.backend).is_none() {
             *skips.entry(entry.backend.as_str()).or_default() += 1;
         }
     }

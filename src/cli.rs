@@ -1,9 +1,7 @@
 //! The `delegate` CLI: `run` starts a detached supervisor, `watch` reads job records.
 //! The record file under `$TMPDIR/delegate-jobs/` is the only link between them.
 
-use crate::backends::cursor::build_argv;
-use crate::backends::cursor::make_cursor_adapter;
-use crate::capability::map_capability;
+use crate::backends::Backend;
 use crate::config::build_deps;
 use crate::git::capture_head;
 use crate::job::{JobDeps, JobHandle};
@@ -600,17 +598,26 @@ fn supervise(args: &[String]) -> i32 {
     let _ = std::fs::remove_file(&prompt_file);
     let prompt = format!("{prompt}\n\n---\n\n{}", status_block()).replace('\0', "");
 
-    let capres = map_capability(cap, true);
+    let resolved = match resolve_model(Some(model), &config) {
+        Ok(r) => r,
+        Err(e) => return fail(e.to_string()),
+    };
+    let Some(backend) = Backend::from_name(&resolved.backend) else {
+        return fail(format!(
+            "model \"{model}\" uses backend \"{}\", which is not implemented yet",
+            resolved.backend
+        ));
+    };
     let session = flag(&kv, "--session").map(str::to_string);
     let resumed_from = flag(&kv, "--resumed-from").map(str::to_string);
-    let argv = build_argv(model, &capres.flags, session.as_deref(), &prompt);
+    let (argv, is_write) = backend.argv(model, cap, session.as_deref(), &prompt);
     let spec = JobSpec {
-        bin: crate::cursor_bin::resolve_cursor_bin(None),
+        bin: backend.bin(),
         argv,
         cwd: cwd.clone(),
         model: model.clone(),
-        backend: "cursor".into(),
-        is_write: capres.is_write,
+        backend: backend.name().into(),
+        is_write,
         path: Some(resolve_path(cwd)),
         head_before: capture_head(cwd, None),
         gate: gate.clone(),
@@ -629,7 +636,7 @@ fn supervise(args: &[String]) -> i32 {
         Some(inner) => inner,
     };
     let mut rd = JobDeps::new(
-        Arc::new(make_cursor_adapter()),
+        Arc::new(backend),
         idle(config.profile.idle_ms, 300_000.0),
         idle(config.profile.tool_idle_ms, 1_800_000.0),
     );

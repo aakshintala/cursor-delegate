@@ -1,3 +1,4 @@
+use crate::backends::Backend;
 use crate::types::{Config, ResolvedModel};
 
 #[derive(Debug)]
@@ -24,7 +25,7 @@ pub fn resolve_model(
             message: format!("model \"{model}\" is not in the allow-list"),
         }) as Box<dyn std::error::Error + Send + Sync>
     })?;
-    if entry.backend != "cursor" {
+    if Backend::from_name(&entry.backend).is_none() {
         return Err(format!(
             "model \"{model}\" uses backend \"{}\", which is not implemented yet",
             entry.backend

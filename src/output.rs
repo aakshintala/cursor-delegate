@@ -1,5 +1,5 @@
 use crate::backends::types::BackendResult;
-use crate::types::{RUN_STATUSES, RunOutput, RunStatus, Usage};
+use crate::types::{RUN_STATUSES, RunOutput, RunStatus};
 
 pub fn derive_status(text: &str, raw_is_error: Option<bool>, clean_exit: bool) -> RunStatus {
     let lines: Vec<&str> = text
@@ -37,20 +37,19 @@ pub fn to_run_output(
     res: &BackendResult,
     model: &str,
     backend: &str,
-    usage: Option<Usage>,
     cost_usd: Option<f64>,
+    cost_estimated: bool,
 ) -> RunOutput {
-    let text = res.raw.result.clone().unwrap_or_default();
     RunOutput {
-        status: derive_status(&text, res.raw.is_error, res.clean_exit),
-        text,
-        session_id: res.raw.session_id.clone(),
+        status: derive_status(&res.text, res.is_error, res.clean_exit),
+        text: res.text.clone(),
+        session_id: res.session_id.clone(),
         backend: backend.to_string(),
         model: model.to_string(),
-        usage,
+        usage: res.usage.clone(),
         cost_usd,
-        cost_estimated: true,
-        duration_ms: res.raw.duration_ms,
+        cost_estimated,
+        duration_ms: res.duration_ms,
         job_id: None,
         stderr_tail: None,
         gate_result: None,
@@ -63,7 +62,6 @@ pub fn to_run_output(
 mod tests {
     use super::*;
     use crate::backends::types::BackendResult;
-    use crate::types::RawCursorJson;
 
     #[test]
     fn explicit_trailing_status_wins() {
@@ -178,16 +176,14 @@ mod tests {
     #[test]
     fn to_run_output_maps_raw() {
         let res = BackendResult {
-            raw: RawCursorJson {
-                result: Some("hi\nSTATUS: DONE".into()),
-                session_id: Some("s1".into()),
-                duration_ms: Some(1234.0),
-                ..RawCursorJson::default()
-            },
+            text: "hi\nSTATUS: DONE".into(),
+            session_id: Some("s1".into()),
+            duration_ms: Some(1234.0),
             clean_exit: true,
             stderr: String::new(),
+            ..Default::default()
         };
-        let out = to_run_output(&res, "composer-2.5", "cursor", None, None);
+        let out = to_run_output(&res, "composer-2.5", "cursor", None, true);
         assert_eq!(out.status, RunStatus::Done);
         assert_eq!(out.text, "hi\nSTATUS: DONE");
         assert_eq!(out.session_id.as_deref(), Some("s1"));

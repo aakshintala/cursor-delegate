@@ -1,7 +1,7 @@
 //! Single-job supervisor core: spawn via the backend, idle watchdog, heartbeat records,
 //! gate + change-set finalize, and cancel.
 
-use crate::backends::types::{Backend, BackendResult, Event, ProgressSnapshotRaw};
+use crate::backends::types::{BackendResult, Event, ProgressSnapshotRaw, Runner};
 use crate::finalize::{finalize_run, finalize_stall};
 use crate::status_record::StatusRecordWriter;
 use crate::types::{
@@ -18,7 +18,7 @@ const HEARTBEAT_MS: u64 = 30_000;
 pub type FinalizeFn = Arc<dyn Fn(&BackendResult, &FinalizeCtx) -> RunOutput + Send + Sync>;
 
 pub struct JobDeps {
-    pub backend: Arc<dyn Backend>,
+    pub backend: Arc<dyn Runner>,
     pub idle_ms: Option<f64>,
     pub tool_idle_ms: Option<f64>,
     pub finalize: FinalizeFn,
@@ -28,7 +28,7 @@ pub struct JobDeps {
 }
 
 impl JobDeps {
-    pub fn new(backend: Arc<dyn Backend>, idle_ms: Option<f64>, tool_idle_ms: Option<f64>) -> Self {
+    pub fn new(backend: Arc<dyn Runner>, idle_ms: Option<f64>, tool_idle_ms: Option<f64>) -> Self {
         Self {
             backend,
             idle_ms,

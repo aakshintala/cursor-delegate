@@ -1,9 +1,15 @@
-use crate::types::{JobSpec, RawCursorJson};
+use crate::types::{JobSpec, Usage};
 
 /// What the backend returns when the child exits.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BackendResult {
-    pub raw: RawCursorJson,
+    pub text: String,
+    pub session_id: Option<String>,
+    pub usage: Option<Usage>,
+    /// Cost the backend reported itself; None means price from the model table.
+    pub cost_usd: Option<f64>,
+    pub is_error: Option<bool>,
+    pub duration_ms: Option<f64>,
     pub clean_exit: bool,
     pub stderr: String,
 }
@@ -37,6 +43,7 @@ pub struct Spawned {
     pub drive: Box<dyn FnOnce(EventFn<'_>) -> BackendResult + Send>,
 }
 
-pub trait Backend: Send + Sync {
+/// Job runner's test seam. `Backend` delegates to `spawn`; job tests use a fake.
+pub trait Runner: Send + Sync {
     fn run(&self, spec: &JobSpec) -> Spawned;
 }

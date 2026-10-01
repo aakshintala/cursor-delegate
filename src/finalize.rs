@@ -20,14 +20,11 @@ pub fn base_output(
     price_map: &PriceMap,
     job_id: Option<&str>,
 ) -> RunOutput {
-    let usage = res.raw.usage.clone();
-    let mut out = to_run_output(
-        res,
-        model,
-        backend,
-        usage.clone(),
-        compute_cost(usage.as_ref(), price_map, model),
-    );
+    let (cost_usd, cost_estimated) = match res.cost_usd {
+        Some(cost) => (Some(cost), false),
+        None => (compute_cost(res.usage.as_ref(), price_map, model), true),
+    };
+    let mut out = to_run_output(res, model, backend, cost_usd, cost_estimated);
     if let Some(id) = job_id {
         out.job_id = Some(id.to_string());
     }
@@ -124,7 +121,7 @@ pub fn default_finalize_ctx(cwd: &str, model: &str, backend: &str) -> FinalizeCt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ChangeSet, GateResult, RawCursorJson, RunStatus};
+    use crate::types::{ChangeSet, GateResult, Price, RunStatus, Usage};
 
     fn base_ctx() -> FinalizeCtx {
         let mut ctx = default_finalize_ctx("/repo", "composer-2.5", "cursor");
@@ -134,13 +131,11 @@ mod tests {
 
     fn ok_result() -> BackendResult {
         BackendResult {
-            raw: RawCursorJson {
-                result: Some("done\nSTATUS: DONE".into()),
-                is_error: Some(false),
-                ..RawCursorJson::default()
-            },
+            text: "done\nSTATUS: DONE".into(),
+            is_error: Some(false),
             clean_exit: true,
             stderr: String::new(),
+            ..Default::default()
         }
     }
 
@@ -168,9 +163,9 @@ mod tests {
     #[test]
     fn stderr_present_on_non_clean() {
         let res = BackendResult {
-            raw: RawCursorJson::default(),
             clean_exit: false,
             stderr: "boom".into(),
+            ..Default::default()
         };
         let out = finalize_run(&res, &base_ctx());
         assert_eq!(out.status, RunStatus::Error);
@@ -232,9 +227,9 @@ mod tests {
             error: None,
         }));
         let res = BackendResult {
-            raw: RawCursorJson::default(),
             clean_exit: false,
             stderr: "boom".into(),
+            ..Default::default()
         };
         let out = finalize_run(&res, &ctx);
         assert_eq!(out.status, RunStatus::Error);
@@ -252,13 +247,11 @@ mod tests {
             error: None,
         }));
         let res = BackendResult {
-            raw: RawCursorJson {
-                result: Some("q?\nSTATUS: NEEDS_CONTEXT".into()),
-                is_error: Some(false),
-                ..RawCursorJson::default()
-            },
+            text: "q?\nSTATUS: NEEDS_CONTEXT".into(),
+            is_error: Some(false),
             clean_exit: true,
             stderr: String::new(),
+            ..Default::default()
         };
         let out = finalize_run(&res, &ctx);
         assert_eq!(out.status, RunStatus::NeedsContext);
@@ -301,10 +294,33 @@ mod tests {
 
     fn stalled() -> BackendResult {
         BackendResult {
-            raw: RawCursorJson::default(),
             clean_exit: false,
             stderr: String::new(),
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn reported_cost_is_not_estimated() {
+        let mut res = ok_result();
+        res.cost_usd = Some(1.25);
+        res.usage = Some(Usage {
+            input_tokens: 1_000_000.0,
+            ..Default::default()
+        });
+        let mut ctx = base_ctx();
+        ctx.price_map.insert(
+            "composer-2.5".into(),
+            Price {
+                input: 0.5,
+                output: 2.5,
+                cache_read: 0.2,
+                cache_write: 0.0,
+            },
+        );
+        let out = finalize_run(&res, &ctx);
+        assert_eq!(out.cost_usd, Some(1.25));
+        assert!(!out.cost_estimated);
     }
 
     #[test]

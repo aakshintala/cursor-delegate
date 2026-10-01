@@ -3,11 +3,9 @@
 #![allow(clippy::type_complexity, clippy::large_enum_variant)]
 
 pub mod backends;
-pub mod capability;
 pub mod cli;
 pub mod cli_info;
 pub mod config;
-pub mod cursor_bin;
 pub mod doctor;
 pub mod finalize;
 pub mod gate;

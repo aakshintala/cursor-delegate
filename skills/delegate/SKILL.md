@@ -61,7 +61,6 @@ feeds a runner, the gate runs the runner. A gate that greps for a file is not a 
 `delegate resume <id>` takes the new prompt on stdin and prints the new job id. `--model` must
 stay on the same backend. It adds `supersededBy` to the old record, and exits 2 on a `RUNNING`
 job or a record with no session id (a `CANCELLED` one). Answer `NEEDS_CONTEXT` with it.
-For read work, the brief says not to edit.
 
 `--tool-idle-ms` widens how long a running tool may stay silent before the idle watchdog
 kills the job (default 1800000, 30 min; a model silent between tools gets 300000). It also

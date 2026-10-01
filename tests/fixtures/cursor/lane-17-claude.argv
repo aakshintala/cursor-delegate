@@ -1,0 +1,1 @@
+cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model grok-4.7-high --workspace /Users/user/work/delegate-17-claude --sandbox disabled 

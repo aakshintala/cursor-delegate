@@ -1,12 +1,10 @@
 # Plan-writer brief
 
-Read this only when delegating plan authoring. Copy everything inside the fence
-into a file, replacing every `«...»` placeholder, and send it with
-`delegate run --model grok-4.7-xhigh --capability read-only < brief.md` (`read-write` only
-when the plan must land in the repo). Answer a `NEEDS_CONTEXT` job with `delegate resume`.
+Read this only when delegating plan authoring. Fill every `«...»` placeholder, then send it
+as in [SKILL.md § Plan writing](./SKILL.md#plan-writing).
 
 A filled brief replaces placeholders and nothing else. `«PLAN_OUTPUT_PATH»`
-becomes `docs/plans/2026-07-09-delegate-skill.md`; `«Feature Name»` becomes the
+becomes `docs/plans/YYYY-MM-DD-<slug>.md`; `«Feature Name»` becomes the
 feature; `«PASTE_APPROVED_SPEC_OR_SUMMARY»` becomes the spec text or the paths to
 paste from. Sections whose shape the delegate should reuse rather than restate
 (`Task structure`, `No placeholders`) can collapse to one line pointing back at
@@ -31,8 +29,7 @@ implementation plan markdown file — planning document only.
 
   STATUS: NEEDS_CONTEXT
 
-  The orchestrator will answer with `delegate resume` and you will continue. Do not
-  guess through blockers.
+  Stop and ask; the orchestrator answers and you continue. Do not guess through blockers.
 - When the plan is complete, end with:
 
   STATUS: DONE
@@ -40,7 +37,6 @@ implementation plan markdown file — planning document only.
 ## Output path
 
 Write the plan to: «PLAN_OUTPUT_PATH»
-(Example: docs/superpowers/plans/YYYY-MM-DD-«feature-slug».md)
 
 ## Plan document header (required)
 
@@ -48,7 +44,7 @@ Start the plan with this header shape (fill Goal / Architecture / Tech Stack):
 
 # «Feature Name» Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** «one sentence»
 

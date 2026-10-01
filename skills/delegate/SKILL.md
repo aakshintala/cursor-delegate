@@ -26,9 +26,6 @@ gate is what you are buying, and a hand edit skips it.
 
 ## Model picks
 
-Budget order: cursor carries the bulk, pi is cheap bulk once it lands, Claude is moderate,
-OpenAI is escalation only.
-
 | Use | Model |
 |---|---|
 | Bulk, default | `composer-2.5` |
@@ -51,8 +48,6 @@ Each role is a `delegate run` you construct; nothing is configured anywhere.
 | Implementer | `composer-2.5` | `read-write` | one planned task |
 | Spec / quality reviewer | not the implementer's model | `read-only` | review for gaps / quality |
 
-Plan writing: `grok-4.7-xhigh`, `read-only`, brief from [`plan-writer-brief.md`](./plan-writer-brief.md).
-
 ## Running
 
 ```bash
@@ -68,10 +63,13 @@ syntax error, and nothing is checked. Make it the next consumer's first action: 
 feeds a runner, the gate runs the runner. A gate that greps for a file is not a gate. Read
 `result.gateResult` in the record, and rerun the check yourself when `passed` is false.
 
-`delegate resume <id>` continues a finished job in its session, with the new prompt on stdin;
-`--model` (same backend only), `--capability` and `--gate` override the stored values. It
-prints the new job id and adds `supersededBy` to the old record. `delegate cancel <id>` stops
-a running job and prints its record.
+`delegate resume <id>` takes the new prompt on stdin and prints the new job id. `--model` must
+stay on the same backend. It adds `supersededBy` to the old record, and exits 2 on a `RUNNING`
+job or a record with no session id (a `CANCELLED` one). Answer `NEEDS_CONTEXT` with it.
+
+`--tool-idle-ms` widens how long a running tool may stay silent before the idle watchdog
+kills the job (default 1800000, 30 min; a model silent between tools gets 300000). It also
+bounds the gate.
 
 ## Waiting
 
@@ -87,16 +85,24 @@ delegate watch <id-a> <id-b> --timeout 1800
 The record is `$TMPDIR/delegate-jobs/<id>.json` (a terminal record has no `lastHeartbeatAt`):
 
 ```json
-{"status":"DONE","result":{"status":"DONE","text":"Renamed the helper in 4 files.\n\nSTATUS: DONE","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","backend":"cursor","model":"composer-2.5","usage":{"inputTokens":18234,"outputTokens":1207,"cacheReadTokens":9100,"cacheWriteTokens":0},"costUsd":0.0148,"costEstimated":false,"durationMs":84213,"jobId":"d2f4a8e6-51c7-4b3a-8f90-6e1a7c3b5d02"},"supervisorPid":48213,"resume":{"model":"composer-2.5","cwd":"/abs/repo","capability":"read-write","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","gate":"cargo test","toolIdleMs":null}}
+{"status":"DONE","result":{"status":"DONE","text":"Renamed the helper in 4 files.\n\nSTATUS: DONE","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","backend":"cursor","model":"composer-2.5","usage":{"inputTokens":18234,"outputTokens":1207,"cacheReadTokens":9100,"cacheWriteTokens":0},"costUsd":0.0148,"costEstimated":true,"durationMs":84213,"jobId":"d2f4a8e6-51c7-4b3a-8f90-6e1a7c3b5d02"},"supervisorPid":48213,"resume":{"model":"composer-2.5","cwd":"/abs/repo","capability":"read-write","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","gate":"cargo test","toolIdleMs":null}}
 ```
 
 `status` is `DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`, `ERROR` (from the
-agent's trailing STATUS line or the supervisor), or `CANCELLED`. `text` is the agent's final
-message; for `NEEDS_CONTEXT` it is the question. Answer it with `delegate resume`.
+agent's trailing STATUS line or the supervisor), `CANCELLED`, or `STALLED` (the idle watchdog
+killed it: rerun with a larger `--tool-idle-ms`). `text` is the agent's final message; for
+`NEEDS_CONTEXT` it is the question.
+
+- `result.gateResult`: a failing gate downgrades `DONE` to `DONE_WITH_CONCERNS`; it holds the
+  gate's `exitCode` and `outputTail`.
+- `result.changeSet`: git delta for the cwd (`newCommits`, `filesChanged`, `diffstat`,
+  `uncommittedFiles`).
+- `result.concerns`: warnings from the CLI, e.g. commits landed but the tree is still dirty.
 
 - **Resume chain:** follow `supersededBy` to the newest record; the old one stays as it was.
-- **Stuck job:** a `RUNNING` record whose `lastHeartbeatAt` stops advancing is dead. Nothing
-  heals it: `delegate cancel` it and rerun.
+- **Stuck job:** `watch` rewrites a record whose supervisor pid is dead to `ERROR` ("supervisor
+  died"). A live supervisor whose `lastHeartbeatAt` has gone stale is not healed: `delegate
+  cancel` it and rerun.
 - A weak model may skip the STATUS line and guess; your review of the artifact is the backstop.
 
 ## Exit codes

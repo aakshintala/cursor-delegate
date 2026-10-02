@@ -22,7 +22,7 @@ Pick from the tier that fits the work, in this order of preference:
 | Hard | hard work, and escalation after a Work model fails | `grok-4.7-xhigh` → `claude-opus-5-5` → `openai-codex/gpt-6.1-sol` |
 
 A provider's **headroom** is its remaining quota on its tightest window (session, weekly or
-monthly). The providers are cursor (`composer-2.5`, `grok-*`), opencode-go (`opencode-go/*`),
+monthly): the lowest percent on its line from `~/.agents/bin/quota`. The providers are cursor (`composer-2.5`, `grok-*`), opencode-go (`opencode-go/*`),
 Anthropic (`claude-*`) and OpenAI (`openai-codex/*`).
 
 - **Read** picks itself: the first model in the order whose provider has at least 20% headroom.

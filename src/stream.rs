@@ -44,6 +44,7 @@ pub fn init_stream_state() -> StreamState {
 pub struct ParsedLine {
     pub(crate) result: Option<RawCursorJson>,
     pub changed: bool,
+    pub(crate) assistant_text: Option<String>,
 }
 
 const PATH_ARG_KEYS: [&str; 5] = ["path", "filePath", "file_path", "target", "destination"];
@@ -140,6 +141,7 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
         return ParsedLine {
             changed: false,
             result: None,
+            assistant_text: None,
         };
     }
     let ev: Value = match serde_json::from_str(trimmed) {
@@ -148,6 +150,7 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
             return ParsedLine {
                 changed: false,
                 result: None,
+                assistant_text: None,
             };
         }
     };
@@ -157,6 +160,7 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
             return ParsedLine {
                 changed: false,
                 result: None,
+                assistant_text: None,
             };
         }
     };
@@ -167,10 +171,16 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
         return ParsedLine {
             changed: false,
             result: None,
+            assistant_text: None,
         };
     }
 
     let mut changed = false;
+    let assistant_text = if ty == "assistant" {
+        extract_assistant_text(ev.get("message"))
+    } else {
+        None
+    };
     if let Some(n) = output_tokens(&ev) {
         state.tokens_so_far = state.tokens_so_far.max(n);
         changed = true;
@@ -195,7 +205,7 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
             }
         }
         "assistant" => {
-            if let Some(text) = extract_assistant_text(ev.get("message")) {
+            if let Some(text) = assistant_text.as_ref() {
                 let truncated: String = text.chars().take(200).collect();
                 state.last_assistant = Some(truncated);
                 state.phase = Some("responding".into());
@@ -223,6 +233,7 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
             return ParsedLine {
                 result: Some(raw),
                 changed: true,
+                assistant_text: None,
             };
         }
         _ => {}
@@ -231,6 +242,7 @@ pub fn parse_line(line: &str, state: &mut StreamState) -> ParsedLine {
     ParsedLine {
         result: None,
         changed,
+        assistant_text,
     }
 }
 
@@ -349,7 +361,7 @@ mod tests {
     fn assistant_text_truncated_to_200() {
         let mut s = init_stream_state();
         let long = "x".repeat(300);
-        parse_line(
+        let parsed = parse_line(
             &json!({
                 "type":"assistant",
                 "message":{"content":[{"type":"text","text": long}]}
@@ -359,6 +371,15 @@ mod tests {
         );
         assert_eq!(s.last_assistant.as_ref().map(|t| t.len()), Some(200));
         assert_eq!(s.phase.as_deref(), Some("responding"));
+        assert_eq!(parsed.assistant_text.as_deref(), Some(long.as_str()));
+
+        let mut s2 = init_stream_state();
+        let parsed2 = parse_line(
+            &json!({"type":"tool_call","subtype":"started","tool_call":{"shellToolCall":{}}})
+                .to_string(),
+            &mut s2,
+        );
+        assert!(parsed2.assistant_text.is_none());
     }
 
     #[test]

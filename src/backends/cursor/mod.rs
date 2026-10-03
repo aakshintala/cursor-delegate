@@ -79,6 +79,7 @@ pub(crate) fn spawn_with_session(spec: &JobSpec, launched_session: Option<String
         drive: Box::new(move |on| {
             let mut state = init_stream_state();
             let mut result: Option<RawCursorJson> = None;
+            let mut messages: Vec<String> = Vec::new();
             let pumped = super::pump(
                 stdout,
                 stderr,
@@ -88,10 +89,11 @@ pub(crate) fn spawn_with_session(spec: &JobSpec, launched_session: Option<String
                     reaped.store(true, Ordering::SeqCst);
                     clean
                 },
-                |line| handle_line(line, &mut state, &mut result, on),
+                |line| handle_line(line, &mut state, &mut result, &mut messages, on),
             );
             finish(
                 result,
+                &messages,
                 pumped.clean_exit,
                 &pumped.stderr,
                 !pumped.saw_stdout,
@@ -105,21 +107,32 @@ pub(crate) fn spawn_with_session(spec: &JobSpec, launched_session: Option<String
 pub fn parse_stdout(stdout: &str, clean_exit: bool, stderr: &str) -> BackendResult {
     let mut state = init_stream_state();
     let mut raw = None;
+    let mut messages: Vec<String> = Vec::new();
     for line in stdout.split_inclusive('\n') {
-        handle_line(line.as_bytes(), &mut state, &mut raw, &|_: Event| {});
+        handle_line(
+            line.as_bytes(),
+            &mut state,
+            &mut raw,
+            &mut messages,
+            &|_: Event| {},
+        );
     }
-    finish(raw, clean_exit, stderr, stdout.is_empty(), None)
+    finish(raw, &messages, clean_exit, stderr, stdout.is_empty(), None)
 }
 
 fn handle_line(
     line: &[u8],
     state: &mut StreamState,
     raw: &mut Option<RawCursorJson>,
+    messages: &mut Vec<String>,
     on: EventFn<'_>,
 ) {
     let parsed = parse_line(&String::from_utf8_lossy(line), state);
     if parsed.result.is_some() {
         *raw = parsed.result;
+    }
+    if let Some(text) = parsed.assistant_text {
+        messages.push(text);
     }
     if parsed.changed {
         on(Event::Progress(ProgressSnapshotRaw {
@@ -132,9 +145,42 @@ fn handle_line(
     }
 }
 
+fn non_empty_concat(messages: &[String]) -> String {
+    messages
+        .iter()
+        .filter(|m| !m.is_empty())
+        .fold(String::new(), |mut acc, m| {
+            acc.push_str(m);
+            acc
+        })
+}
+
+fn join_assistant_messages(messages: &[String]) -> String {
+    let mut text = String::new();
+    for msg in messages {
+        if msg.is_empty() {
+            continue;
+        }
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(msg);
+    }
+    text
+}
+
+fn text_from_result_and_messages(result: &str, messages: &[String]) -> String {
+    if non_empty_concat(messages) == result {
+        join_assistant_messages(messages)
+    } else {
+        result.to_string()
+    }
+}
+
 /// Turn the last result line (or the lack of one) into the normalized result.
 fn finish(
     raw: Option<RawCursorJson>,
+    messages: &[String],
     clean_exit: bool,
     stderr: &str,
     stdout_empty: bool,
@@ -142,8 +188,9 @@ fn finish(
 ) -> BackendResult {
     let launched = || launched_session.map(str::to_string);
     if let Some(raw) = raw {
+        let result = raw.result.unwrap_or_default();
         return BackendResult {
-            text: raw.result.unwrap_or_default(),
+            text: text_from_result_and_messages(&result, messages),
             session_id: raw.session_id.or_else(launched),
             usage: raw.usage,
             cost_usd: raw.cost_usd,
@@ -181,17 +228,19 @@ mod tests {
     fn drive(stdout: &[u8], stderr: &[u8], on: EventFn<'_>, clean: bool) -> BackendResult {
         let mut state = init_stream_state();
         let mut result: Option<RawCursorJson> = None;
+        let mut messages: Vec<String> = Vec::new();
         let pumped = crate::backends::pump(
             stdout,
             stderr,
             on,
             move || clean,
             |line| {
-                handle_line(line, &mut state, &mut result, on);
+                handle_line(line, &mut state, &mut result, &mut messages, on);
             },
         );
         finish(
             result,
+            &messages,
             pumped.clean_exit,
             &pumped.stderr,
             !pumped.saw_stdout,
@@ -433,9 +482,54 @@ mod tests {
                 "cancelled" => assert_eq!(res.text, NO_RESULT, "{stem}"),
                 // Empty stdout: the text is the stderr we kept.
                 "error-bad-model" => assert_eq!(res.text, stderr, "{stem}"),
+                "glued-messages" => {
+                    let want = "I'll read `calc.py`.\n`calc.py` defines a function named `add`.\nANSWER: add\nSTATUS: DONE";
+                    assert_eq!(res.text, want, "{stem}");
+                    assert!(res.text.lines().any(|l| l == "ANSWER: add"), "{stem}");
+                }
                 other => panic!("unexpected cursor fixture: {other}"),
             }
         }
+    }
+
+    #[test]
+    fn mismatched_messages_and_result_keep_result_verbatim() {
+        let stdout = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"msg-a"}]}}"#,
+            "\n",
+            r#"{"type":"result","is_error":false,"result":"not-the-messages"}"#,
+        );
+        let res = parse_stdout(stdout, true, "");
+        assert_eq!(res.text, "not-the-messages");
+    }
+
+    #[test]
+    fn result_without_assistant_events_keeps_result_verbatim() {
+        let res = parse_stdout(
+            r#"{"type":"result","is_error":false,"result":"verbatim"}"#,
+            true,
+            "",
+        );
+        assert_eq!(res.text, "verbatim");
+    }
+
+    #[test]
+    fn composer_recorded_fixture_text_equals_result_field() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/recorded/cursor/ponytail-33.stdout");
+        let stdout = std::fs::read_to_string(&path).unwrap();
+        let stderr = std::fs::read_to_string(path.with_extension("stderr")).unwrap_or_default();
+        let mut expected = String::new();
+        for line in stdout.lines() {
+            let mut state = init_stream_state();
+            let parsed = parse_line(line, &mut state);
+            if let Some(raw) = parsed.result {
+                expected = raw.result.unwrap_or_default();
+            }
+        }
+        assert!(!expected.is_empty());
+        let res = parse_stdout(&stdout, true, &stderr);
+        assert_eq!(res.text, expected);
     }
 
     #[test]

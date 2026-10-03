@@ -213,6 +213,7 @@ mod tests {
                         cache_read: 0.0,
                         cache_write: 0.0,
                     },
+                    tiers: vec![],
                 },
             );
         }

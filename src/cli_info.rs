@@ -36,6 +36,7 @@ pub fn models_table(config: &Config) -> String {
         .iter()
         .map(|(_, e)| format!("{:.2}", e.price.output))
         .collect();
+    let tiers: Vec<String> = rows.iter().map(|(_, e)| e.tiers.join(",")).collect();
     let id_w = rows
         .iter()
         .map(|(id, _)| id.len())
@@ -66,17 +67,26 @@ pub fn models_table(config: &Config) -> String {
         .max()
         .unwrap_or(0)
         .max("$OUT/1M".len());
+    let tiers_w = tiers
+        .iter()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(0)
+        .max("TIERS".len());
 
-    let mut out = format!(
-        "  {0:<id_w$}  {1:<label_w$}  {2:<backend_w$}  {3:>in_w$}  {4:>out_w$}\n",
-        "ID", "LABEL", "BACKEND", "$IN/1M", "$OUT/1M"
+    let header = format!(
+        "  {0:<id_w$}  {1:<label_w$}  {2:<backend_w$}  {3:>in_w$}  {4:>out_w$}  {5:<tiers_w$}",
+        "ID", "LABEL", "BACKEND", "$IN/1M", "$OUT/1M", "TIERS"
     );
+    let mut out = format!("{}\n", header.trim_end());
     for (i, (id, entry)) in rows.iter().enumerate() {
         let mark = if *id == &config.default { "*" } else { " " };
-        out += &format!(
-            "{mark} {0:<id_w$}  {1:<label_w$}  {2:<backend_w$}  {3:>in_w$}  {4:>out_w$}\n",
-            id, entry.label, entry.backend, ins[i], outs[i]
+        let row = format!(
+            "{mark} {0:<id_w$}  {1:<label_w$}  {2:<backend_w$}  {3:>in_w$}  {4:>out_w$}  {5:<tiers_w$}",
+            id, entry.label, entry.backend, ins[i], outs[i], tiers[i]
         );
+        out.push_str(row.trim_end());
+        out.push('\n');
     }
     out
 }
@@ -147,6 +157,11 @@ mod tests {
                         cache_read: 0.0,
                         cache_write: 0.0,
                     },
+                    tiers: if id == "a-1" {
+                        vec!["standard".into(), "strong".into()]
+                    } else {
+                        vec![]
+                    },
                 },
             );
         }
@@ -164,6 +179,9 @@ mod tests {
         let lines: Vec<&str> = t.lines().collect();
         assert_eq!(lines.len(), 4);
         assert!(lines[0].starts_with("  ID"));
+        assert!(lines[0].contains("TIERS"));
+        assert!(lines[1].ends_with("standard,strong"));
+        assert!(lines.iter().all(|line| line.trim_end() == *line));
         let ids: Vec<&str> = lines[1..]
             .iter()
             .map(|l| l[2..].split_whitespace().next().unwrap())

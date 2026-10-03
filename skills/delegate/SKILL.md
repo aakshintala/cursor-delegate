@@ -9,28 +9,25 @@ description: >
 # Delegate
 
 Run `delegate` (no arguments) for the command syntax, and `delegate models` for the live model
-table with backends and prices.
+table with backends, prices and tiers.
 
-## Model tiers
+## Model ladder
 
-Pick from the tier that fits the work, in this order of preference:
+Pick the lowest rung whose definition covers the job:
 
-| Tier | Fits | Order |
-|---|---|---|
-| Read | exploration, fact-finding, research, triage | `composer-2.5` → `openai-codex/gpt-6-luna:medium` |
-| Work | most implementation and review | `opencode-go/muse-spark-1.3-contributor` → `claude-sonnet-5-5` → `openai-codex/gpt-6-luna:xhigh` |
-| Hard | hard work, and escalation after a Work model fails | `grok-4.7-xhigh` → `claude-opus-5-5` → `openai-codex/gpt-6.1-sol` |
+- `standard`: implements, reviews and explores from a clear brief. Follows the plan as written, flaws included, so it needs a plan someone else checked.
+- `strong`: under-specified tickets. Makes local design calls, and stops and flags a plan that's wrong instead of following it. Writes a lane brief from an approved plan. Checks a plan as the Verifier.
+- `frontier`: long-horizon planning, cross-cutting design, sub-orchestrating a ticket, and the last escalation before the owner.
 
-A provider's **headroom** is its remaining quota on its tightest window (session, weekly or
-monthly): the lowest percent on its line from `~/.agents/bin/quota`. The providers are cursor (`composer-2.5`, `grok-*`), opencode-go (`opencode-go/*`),
-Anthropic (`claude-*`) and OpenAI (`openai-codex/*`).
+The current pool is in the `delegate models` Tiers column. Use a model with no rung only when the owner names it.
 
-- **Read** picks itself: the first model in the order whose provider has at least 20% headroom.
-- **Work and Hard:** once per session, propose one pick per tier to the owner with each
-  provider's headroom, and use the confirmed picks for the rest of the session. Ask again only
-  when quota shifts. When the owner is unavailable, use the last confirmed picks, step down the
-  tier order when a provider runs low, and report the switch.
-- Review an agent's output with a different model from the one that produced it.
+At session start, propose a pool per rung from `delegate models` and `~/.agents/bin/quota`, showing each provider's headroom. The owner confirms it. When the owner is unavailable, use the last confirmed pool, step down within the rung when a provider runs low, and report the switch.
+
+A provider's headroom is its remaining quota on its tightest window (session, weekly or monthly): the lowest percent on its line from `~/.agents/bin/quota`. Map providers by backend or prefix: the `cursor` backend, `opencode-go/*`, `claude-*`, and `openai-codex/*`.
+
+Escalation: when a model fails, go up one rung. When a `frontier` model fails, stop and ask the owner. Never escalate to a model with no rung.
+
+Review rule: review with a model from a different family than the implementer's, at the same rung or higher. Family means the model's maker, such as Anthropic, OpenAI, xAI or Cursor, not its backend or provider.
 
 ## Briefs
 
@@ -80,7 +77,7 @@ delegate watch <id-a> <id-b> --timeout 1800
 The record is `$TMPDIR/delegate-jobs/<id>.json` (a terminal record has no `lastHeartbeatAt`):
 
 ```json
-{"status":"DONE","result":{"status":"DONE","text":"Renamed the helper in 4 files.\n\nSTATUS: DONE","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","backend":"cursor","model":"composer-2.5","usage":{"inputTokens":18234,"outputTokens":1207,"cacheReadTokens":9100,"cacheWriteTokens":0},"costUsd":0.0148,"costEstimated":true,"durationMs":84213,"jobId":"d2f4a8e6-51c7-4b3a-8f90-6e1a7c3b5d02"},"supervisorPid":48213,"resume":{"model":"composer-2.5","cwd":"/abs/repo","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","gate":"cargo test","toolIdleMs":null}}
+{"status":"DONE","result":{"status":"DONE","text":"Renamed the helper in 4 files.\n\nSTATUS: DONE","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","backend":"cursor","model":"model-id","usage":{"inputTokens":18234,"outputTokens":1207,"cacheReadTokens":9100,"cacheWriteTokens":0},"costUsd":0.0148,"costEstimated":true,"durationMs":84213,"jobId":"d2f4a8e6-51c7-4b3a-8f90-6e1a7c3b5d02"},"supervisorPid":48213,"resume":{"model":"model-id","cwd":"/abs/repo","sessionId":"7c1e0a52-3b9f-4e0c-9a55-0d6f1b2c8e41","gate":"cargo test","toolIdleMs":null}}
 ```
 
 `status` is `DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`, `ERROR` (from the

@@ -141,6 +141,8 @@ pub struct ModelEntry {
     pub label: String,
     pub backend: String,
     pub price: Price,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

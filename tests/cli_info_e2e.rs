@@ -39,7 +39,7 @@ fn pi_script(fail_model: Option<&str>) -> String {
     // --list-models answers every query with the full bundled pi table; the
     // doctor matches provider/model exactly (and thinking yes for :suffixed
     // ids), so every bundled model resolves.
-    let list = "provider model context max-out thinking images\nopenai-codex gpt-6-astra 272K 128K yes yes\nopenai-codex gpt-6-luna 272K 128K yes yes\nopenai-codex gpt-6.1-sol 272K 128K yes yes\nopencode-go muse-spark-1.3-contributor 1.1M 128K yes yes\nopencode-go glm-5.3-flash 1.1M 128K yes yes\nopencode-go deepseek-v4.1-flash 1.1M 128K yes yes";
+    let list = "provider model context max-out thinking images\nopenai-codex gpt-6-astra 272K 128K yes yes\nopenai-codex gpt-6-luna 272K 128K yes yes\nopenai-codex gpt-6.1-sol 272K 128K yes yes\nopencode-go muse-spark-1.3-contributor 1.1M 128K yes yes\nopencode-go glm-5.3-flash 1.1M 128K yes yes";
     format!(
         r#"#!/bin/sh
 case "$1" in
@@ -117,7 +117,7 @@ impl Drop for Env {
     }
 }
 
-const SORTED_IDS: [&str; 14] = [
+const SORTED_IDS: [&str; 11] = [
     "claude-fable-5-1",
     "claude-opus-5-5",
     "claude-sonnet-5-5",
@@ -125,11 +125,8 @@ const SORTED_IDS: [&str; 14] = [
     "grok-4.7-high",
     "grok-4.7-xhigh",
     "openai-codex/gpt-6-astra",
-    "openai-codex/gpt-6-luna",
-    "openai-codex/gpt-6-luna:medium",
     "openai-codex/gpt-6-luna:xhigh",
     "openai-codex/gpt-6.1-sol",
-    "opencode-go/deepseek-v4.1-flash",
     "opencode-go/glm-5.3-flash",
     "opencode-go/muse-spark-1.3-contributor",
 ];
@@ -145,18 +142,18 @@ fn models_lists_every_row_with_default_marked() {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 15, "{stdout}");
+    assert_eq!(lines.len(), 12, "{stdout}");
     assert_eq!(
         lines[0],
-        "  ID                                      LABEL                       BACKEND  $IN/1M  $OUT/1M"
+        "  ID                                      LABEL                       BACKEND  $IN/1M  $OUT/1M  TIERS"
     );
     assert_eq!(
         lines[4],
-        "* composer-2.5                            Composer 2.5                cursor     0.50     2.50"
+        "* composer-2.5                            Composer 2.5                cursor     0.50     2.50  standard"
     );
     assert_eq!(
-        lines[14],
-        "  opencode-go/muse-spark-1.3-contributor  Muse Spark 1.3 Contributor  pi         0.10     0.20"
+        lines[11],
+        "  opencode-go/muse-spark-1.3-contributor  Muse Spark 1.3 Contributor  pi         0.10     0.20  strong"
     );
     // Rows sort by backend, then by id; only the default row is starred.
     let ids: Vec<&str> = lines[1..]
@@ -232,7 +229,7 @@ fn doctor_warns_on_pi_model_auth_failure() {
     let e = Env::new_with_pi(
         "doctor-pi-warn",
         &agent_script(FULL_LIST),
-        &pi_script(Some("openai-codex/gpt-6-luna")),
+        &pi_script(Some("openai-codex/gpt-6.1-sol")),
     );
     let out = e.delegate(&["doctor"], None);
     assert_eq!(
@@ -243,7 +240,7 @@ fn doctor_warns_on_pi_model_auth_failure() {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(
-        stdout.contains("warn  pi: model openai-codex/gpt-6-luna auth check failed"),
+        stdout.contains("warn  pi: model openai-codex/gpt-6.1-sol auth check failed"),
         "{stdout}"
     );
     assert!(!stdout.lines().any(|l| l.starts_with("fail")), "{stdout}");

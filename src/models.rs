@@ -90,6 +90,7 @@ mod tests {
                 label: "Composer 2.5".into(),
                 backend: "cursor".into(),
                 price: price(0.5, 2.5, 0.2, 0.0),
+                tiers: vec![],
             },
         );
         models.insert(
@@ -98,6 +99,7 @@ mod tests {
                 label: "Grok 4.7 High".into(),
                 backend: "cursor".into(),
                 price: price(2.0, 6.0, 0.5, 0.0),
+                tiers: vec![],
             },
         );
         models.insert(
@@ -106,6 +108,7 @@ mod tests {
                 label: "GPT-6 Luna".into(),
                 backend: "pi".into(),
                 price: price(0.1, 0.5, 0.01, 0.125),
+                tiers: vec![],
             },
         );
         models.insert(
@@ -114,6 +117,7 @@ mod tests {
                 label: "Claude Sonnet 5.5".into(),
                 backend: "claude".into(),
                 price: price(2.0, 10.0, 0.2, 2.5),
+                tiers: vec![],
             },
         );
         ("composer-2.5".into(), models)

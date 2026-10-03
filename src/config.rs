@@ -133,6 +133,29 @@ fn decode_price(raw: &Value, where_: &str) -> Result<Price, String> {
     Ok(out)
 }
 
+fn decode_tiers(obj: &serde_json::Map<String, Value>, where_: &str) -> Result<Vec<String>, String> {
+    let Some(raw) = obj.get("tiers") else {
+        return Ok(Vec::new());
+    };
+    let error = |value: &Value| {
+        format!(
+            "invalid config: {where_}.tiers must be a list of \"standard\", \"strong\", \"frontier\"; got {value}"
+        )
+    };
+    let items = raw.as_array().ok_or_else(|| error(raw))?;
+    items
+        .iter()
+        .map(|value| {
+            let tier = value.as_str().ok_or_else(|| error(value))?;
+            if ["standard", "strong", "frontier"].contains(&tier) {
+                Ok(tier.to_string())
+            } else {
+                Err(error(value))
+            }
+        })
+        .collect()
+}
+
 fn decode_model_entry(raw: &Value, id: &str, where_: &str) -> Result<ModelEntry, String> {
     let obj = raw
         .as_object()
@@ -142,6 +165,7 @@ fn decode_model_entry(raw: &Value, id: &str, where_: &str) -> Result<ModelEntry,
         label: str_field(obj, "label", &loc)?,
         backend: str_field(obj, "backend", &loc)?,
         price: decode_price(obj.get("price").unwrap_or(&Value::Null), &loc)?,
+        tiers: decode_tiers(obj, &loc)?,
     })
 }
 
@@ -318,6 +342,74 @@ mod tests {
                 message: "ENOENT".into(),
             })
         })
+    }
+
+    fn model_entry_with_tiers(tiers: Option<Value>) -> Result<ModelEntry, String> {
+        let mut raw = serde_json::json!({
+            "label": "M",
+            "backend": "cursor",
+            "price": { "input": 1, "output": 1, "cacheRead": 0, "cacheWrite": 0 }
+        });
+        if let Some(tiers) = tiers {
+            raw.as_object_mut().unwrap().insert("tiers".into(), tiers);
+        }
+        decode_model_entry(&raw, "m", "models.json.models")
+    }
+
+    #[test]
+    fn decodes_model_tiers_and_defaults_to_empty() {
+        assert_eq!(
+            model_entry_with_tiers(Some(serde_json::json!(["standard", "strong"])))
+                .unwrap()
+                .tiers,
+            vec!["standard".to_string(), "strong".to_string()]
+        );
+        assert!(model_entry_with_tiers(None).unwrap().tiers.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_model_tiers() {
+        let bad_rung = model_entry_with_tiers(Some(serde_json::json!(["light"]))).unwrap_err();
+        assert!(
+            bad_rung.contains("models.json.models[\"m\"].tiers"),
+            "{bad_rung}"
+        );
+        assert!(bad_rung.contains("light"), "{bad_rung}");
+
+        let not_a_list = model_entry_with_tiers(Some(serde_json::json!("standard"))).unwrap_err();
+        assert!(
+            not_a_list.contains("models.json.models[\"m\"].tiers"),
+            "{not_a_list}"
+        );
+        assert!(not_a_list.contains("standard"), "{not_a_list}");
+    }
+
+    #[test]
+    fn bundled_catalogue_has_the_model_ladder() {
+        let raw: Value = serde_json::from_str(BUNDLED_MODELS_JSON).unwrap();
+        let models = decode_models(&raw["models"], "models.json.models").unwrap();
+        for (id, expected) in [
+            ("composer-2.5", vec!["standard"]),
+            ("opencode-go/glm-5.3-flash", vec!["standard"]),
+            ("openai-codex/gpt-6-luna:xhigh", vec!["standard"]),
+            ("opencode-go/muse-spark-1.3-contributor", vec!["strong"]),
+            ("claude-sonnet-5-5", vec!["strong"]),
+            ("grok-4.7-high", vec!["strong"]),
+            ("grok-4.7-xhigh", vec!["frontier"]),
+            ("claude-opus-5-5", vec!["frontier"]),
+            ("openai-codex/gpt-6.1-sol", vec!["frontier"]),
+        ] {
+            assert_eq!(models[id].tiers, expected, "{id}");
+        }
+        assert!(models["openai-codex/gpt-6-astra"].tiers.is_empty());
+        assert!(models["claude-fable-5-1"].tiers.is_empty());
+        for removed in [
+            "openai-codex/gpt-6-luna",
+            "openai-codex/gpt-6-luna:medium",
+            "opencode-go/deepseek-v4.1-flash",
+        ] {
+            assert!(!models.contains_key(removed), "{removed}");
+        }
     }
 
     #[test]

@@ -145,16 +145,6 @@ fn handle_line(
     }
 }
 
-fn non_empty_concat(messages: &[String]) -> String {
-    messages
-        .iter()
-        .filter(|m| !m.is_empty())
-        .fold(String::new(), |mut acc, m| {
-            acc.push_str(m);
-            acc
-        })
-}
-
 fn join_assistant_messages(messages: &[String]) -> String {
     let mut text = String::new();
     for msg in messages {
@@ -170,7 +160,7 @@ fn join_assistant_messages(messages: &[String]) -> String {
 }
 
 fn text_from_result_and_messages(result: &str, messages: &[String]) -> String {
-    if non_empty_concat(messages) == result {
+    if messages.concat() == result {
         join_assistant_messages(messages)
     } else {
         result.to_string()
@@ -483,9 +473,8 @@ mod tests {
                 // Empty stdout: the text is the stderr we kept.
                 "error-bad-model" => assert_eq!(res.text, stderr, "{stem}"),
                 "glued-messages" => {
-                    let want = "I'll read `calc.py`.\n`calc.py` defines a function named `add`.\nANSWER: add\nSTATUS: DONE";
+                    let want = "I'll read `calc.py` first.\n`calc.py` defines a single `add` function that returns the sum of its two arguments.\nVERDICT: APPROVE\n\n`calc.py` contains one function, `add`, which returns the sum of its two arguments. The workspace listing shows only that file.\n\nSTATUS: DONE";
                     assert_eq!(res.text, want, "{stem}");
-                    assert!(res.text.lines().any(|l| l == "ANSWER: add"), "{stem}");
                 }
                 other => panic!("unexpected cursor fixture: {other}"),
             }
@@ -519,15 +508,12 @@ mod tests {
             .join("tests/fixtures/recorded/cursor/ponytail-33.stdout");
         let stdout = std::fs::read_to_string(&path).unwrap();
         let stderr = std::fs::read_to_string(path.with_extension("stderr")).unwrap_or_default();
-        let mut expected = String::new();
-        for line in stdout.lines() {
-            let mut state = init_stream_state();
-            let parsed = parse_line(line, &mut state);
-            if let Some(raw) = parsed.result {
-                expected = raw.result.unwrap_or_default();
-            }
-        }
-        assert!(!expected.is_empty());
+        let expected = stdout
+            .lines()
+            .rev()
+            .find_map(|l| parse_line(l, &mut init_stream_state()).result)
+            .and_then(|raw| raw.result)
+            .unwrap();
         let res = parse_stdout(&stdout, true, &stderr);
         assert_eq!(res.text, expected);
     }

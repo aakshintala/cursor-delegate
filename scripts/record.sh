@@ -11,7 +11,7 @@
 # tests/fixtures/contract/BACKEND/ instead, for curated parser-contract streams.
 set -uo pipefail
 
-[ $# -ge 3 ] || { sed -n 2,9p "$0"; exit 2; }
+[ $# -ge 3 ] || { sed -n 2,11p "$0"; exit 2; }
 backend=$1 model=$2 name=$3 cwd=${4:-$PWD} session=${5:-}
 here="$(cd "$(dirname "$0")" && pwd)"
 kind=${FIXTURE_KIND:-recorded}

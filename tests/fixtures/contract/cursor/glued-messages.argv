@@ -1,0 +1,1 @@
+cursor-agent --print --output-format stream-json --trust --approve-mcps --force --model grok-4.7-high --workspace /private/tmp/claude-501/-Users-user-work-delegate/2a883dd6-b34d-402a-aff9-5c336d74dc79/scratchpad/w-glued --sandbox disabled 

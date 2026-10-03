@@ -22,7 +22,7 @@ You need Rust (`cargo`), and `cursor-agent` on PATH with `cursor-agent login` be
 | `delegate resume <jobId>` | Continue a finished job that has a session id; optional model/gate overrides. |
 | `delegate cancel <jobId>` | Stop a running job and print its terminal record. |
 | `delegate watch <jobId>...` | Block until each job is terminal (optional `--timeout` seconds). |
-| `delegate models` | List configured model ids, labels, backends, tiers, and prices. |
+| `delegate models` | List configured model ids, labels, backends, prices, and tiers. |
 | `delegate doctor` | Check the binary, `cursor-agent`, login, and model menu drift. |
 
 Every job runs with writes enabled. A read task says "do not edit" in its brief; the record's `changeSet` shows any write. Parallel jobs need separate cwds (one worktree per lane).

@@ -9,7 +9,7 @@ description: >
 # Delegate
 
 Run `delegate` (no arguments) for the command syntax, and `delegate models` for the live model
-table with backends, tiers and prices.
+table with backends, prices and tiers.
 
 ## Model ladder
 

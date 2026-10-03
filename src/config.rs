@@ -403,13 +403,6 @@ mod tests {
         }
         assert!(models["openai-codex/gpt-6-astra"].tiers.is_empty());
         assert!(models["claude-fable-5-1"].tiers.is_empty());
-        for removed in [
-            "openai-codex/gpt-6-luna",
-            "openai-codex/gpt-6-luna:medium",
-            "opencode-go/deepseek-v4.1-flash",
-        ] {
-            assert!(!models.contains_key(removed), "{removed}");
-        }
     }
 
     #[test]

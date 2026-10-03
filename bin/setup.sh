@@ -28,7 +28,10 @@ run cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" --target-dir "
 
 INSTALL_BIN="$HOME/.local/bin/delegate"
 run mkdir -p "$(dirname "$INSTALL_BIN")"
-run cp "$TARGET_DIR/release/delegate" "$INSTALL_BIN"
+# Copy then rename: overwriting a running binary in place can get its processes
+# killed on macOS, and running jobs keep the old file until they exit.
+run cp "$TARGET_DIR/release/delegate" "$INSTALL_BIN.new"
+run mv -f "$INSTALL_BIN.new" "$INSTALL_BIN"
 
 case ":${PATH}:" in
   *":$HOME/.local/bin:"*) ;;
